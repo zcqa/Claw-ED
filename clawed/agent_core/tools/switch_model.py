@@ -52,7 +52,7 @@ class SwitchModelTool:
                             "type": "string",
                             "description": (
                                 "Provider name: ollama, anthropic, openai, "
-                                "google, openrouter"
+                                "google, openrouter, deepseek"
                             ),
                         },
                         "tier": {
@@ -94,6 +94,7 @@ class SwitchModelTool:
             "openai": config.openai_model,
             "google": config.google_model,
             "openrouter": config.openrouter_model,
+            "deepseek": config.deepseek_model,
         }
         model = model_map.get(provider, "unknown")
         tiers = config.tier_providers or {}
@@ -122,6 +123,7 @@ class SwitchModelTool:
             "openai": config.openai_model,
             "google": config.google_model,
             "openrouter": config.openrouter_model,
+            "deepseek": config.deepseek_model,
         }
         current_model = model_map.get(current_provider, "")
 
@@ -152,6 +154,7 @@ class SwitchModelTool:
             "openai": "openai_model",
             "google": "google_model",
             "openrouter": "openrouter_model",
+            "deepseek": "deepseek_model",
         }
         field = field_map.get(cfg.provider.value, "ollama_model")
         setattr(cfg, field, model_name)
@@ -188,7 +191,7 @@ class SwitchModelTool:
         except ValueError:
             return ToolResult(
                 text=f"Unknown provider: {provider}. "
-                "Options: ollama, anthropic, openai, google, openrouter",
+                "Options: ollama, anthropic, openai, google, openrouter, deepseek",
             )
 
     def _set_tier(self, params: dict[str, Any]) -> ToolResult:
@@ -215,7 +218,7 @@ class SwitchModelTool:
         from clawed.config import get_api_key
 
         providers = [
-            "ollama", "anthropic", "openai", "google", "openrouter",
+            "ollama", "anthropic", "openai", "google", "openrouter", "deepseek",
         ]
         lines = ["Configured providers:"]
         for p in providers:

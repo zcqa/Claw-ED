@@ -6,7 +6,7 @@ The agent loop:
   3. If LLM returns text -> return it
   4. Repeat (max 5 iterations to prevent infinite loops)
 
-Works with Anthropic (native tool use), OpenAI (function calling),
+Works with Anthropic (native tool use), OpenAI and DeepSeek (function calling),
 and Ollama (when model supports tools, falls back to prompt-based).
 """
 from __future__ import annotations
@@ -71,7 +71,16 @@ async def run_agent(
     """
     config = config or AppConfig.load()
 
-    messages: list[dict[str, Any]] = list(conversation_history or [])
+    native_scope = ""
+    if config.provider == LLMProvider.DEEPSEEK and teacher_id:
+        from clawed.agent_core.memory.sessions import load_native_history
+        from clawed.deepseek import history_key
+
+        native_scope = history_key(config)
+        messages = load_native_history(teacher_id, native_scope)
+    else:
+        messages = list(conversation_history or [])
+    history_length = len(messages)
     messages.append({"role": "user", "content": message})
 
     for _iteration in range(_MAX_TOOL_ITERATIONS):
@@ -81,6 +90,12 @@ async def run_agent(
             response = await _call_with_ollama_tools(messages, system, config)
 
         if response["type"] == "text":
+            if native_scope:
+                from clawed.agent_core.memory.sessions import save_native_turn
+
+                messages.append({"role": "assistant", "content": response["content"],
+                                 "deepseek_message": response["deepseek_message"]})
+                save_native_turn(teacher_id, native_scope, messages[history_length:])
             return str(response["content"])
 
         if response["type"] == "tool_calls":
@@ -93,6 +108,7 @@ async def run_agent(
                 "tool_calls": tool_calls,
                 "anthropic_content": response.get("anthropic_content"),
                 "response_output": response.get("response_output"),
+                "deepseek_message": response.get("deepseek_message"),
             })
 
             # Execute each tool and add its result
@@ -118,12 +134,35 @@ async def _call_with_native_tools(
     tool_definitions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Call Anthropic or OpenAI with native tool support."""
+    if config.provider == LLMProvider.DEEPSEEK:
+        return await _deepseek_with_tools(messages, system, config, tool_definitions)
     if config.provider == LLMProvider.OPENAI and config.openai_model.startswith("gpt-6"):
         return await _responses_with_tools(messages, system, config, tool_definitions)
     if config.provider == LLMProvider.ANTHROPIC:
         return await _anthropic_with_tools(messages, system, config, tool_definitions)
     else:
         return await _openai_with_tools(messages, system, config, tool_definitions)
+
+
+async def _deepseek_with_tools(
+    messages: list[dict[str, Any]], system: str, config: AppConfig,
+    tool_definitions: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    from clawed.deepseek import build_request, complete
+
+    message = await complete(config, build_request(
+        config, messages, system=system, max_tokens=8192,
+        tools=TOOL_DEFINITIONS if tool_definitions is None else tool_definitions,
+    ))
+    if message.get("tool_calls"):
+        calls = []
+        for call in message["tool_calls"]:
+            arguments = json.loads(call["function"]["arguments"])
+            if not isinstance(arguments, dict):
+                raise ValueError("DeepSeek tool arguments must be a JSON object")
+            calls.append({"id": call["id"], "name": call["function"]["name"], "arguments": arguments})
+        return {"type": "tool_calls", "tool_calls": calls, "deepseek_message": message}
+    return {"type": "text", "content": message["content"], "deepseek_message": message}
 
 
 async def _responses_with_tools(

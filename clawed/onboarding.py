@@ -81,12 +81,13 @@ def _ask_provider() -> tuple[LLMProvider, str | None]:
     table.add_row("2", "Anthropic (Claude)", "Pay per token", "Highest quality")
     table.add_row("3", "OpenAI (GPT-4o)", "Pay per token", "Widely used")
     table.add_row("4", "Ollama (local)", "Free", "Runs on your machine \u2014 no internet needed")
+    table.add_row("5", "DeepSeek", "Pay per token", "Flash / Pro, with optional thinking")
     console.print()
     console.print(table)
 
     while True:
         choice = Prompt.ask(
-            "\n[bold]Pick a provider[/bold]", choices=["1", "2", "3", "4"], default="1",
+            "\n[bold]Pick a provider[/bold]", choices=["1", "2", "3", "4", "5"], default="1",
         )
         if choice == "1":
             provider = LLMProvider.GOOGLE
@@ -112,6 +113,13 @@ def _ask_provider() -> tuple[LLMProvider, str | None]:
                 console.print("  [red]API key cannot be empty.[/red]")
                 continue
             return provider, key.strip()
+        elif choice == "5":
+            console.print("  Get a key at https://platform.deepseek.com/api_keys")
+            key = Prompt.ask("  [bold]DeepSeek API key[/bold]", password=True)
+            if not key.strip():
+                console.print("  [red]API key cannot be empty.[/red]")
+                continue
+            return LLMProvider.DEEPSEEK, key.strip()
         else:
             return LLMProvider.OLLAMA, None
 
@@ -155,6 +163,10 @@ def _detect_available_models() -> tuple[LLMProvider | None, str]:
     if os.environ.get("OPENAI_API_KEY"):
         return LLMProvider.OPENAI, "OpenAI API key found in environment"
 
+    from clawed.config import get_api_key
+    if get_api_key("deepseek"):
+        return LLMProvider.DEEPSEEK, "DeepSeek API key found"
+
     # Check Ollama Cloud (API key in env) — before local Ollama check
     if os.environ.get("OLLAMA_API_KEY"):
         return LLMProvider.OLLAMA, "Ollama Cloud API key found in environment"
@@ -179,7 +191,7 @@ def _detect_available_models() -> tuple[LLMProvider | None, str]:
 
     return None, (
         "No LLM backend detected.\n"
-        "  Set ANTHROPIC_API_KEY or OPENAI_API_KEY in your environment,\n"
+        "  Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or DEEPSEEK_API_KEY in your environment,\n"
         "  or install Ollama (https://ollama.com/download) and run: ollama pull qwen3.5"
     )
 
@@ -433,11 +445,13 @@ def _ask_provider_wizard() -> tuple[LLMProvider | None, str | None, str | None, 
         "        Install: [cyan]https://ollama.com/download[/cyan]"
     )
     console.print("  [bold][4][/bold] Skip for now — I'll set this up later")
+    console.print("  [bold][5][/bold] DeepSeek — Flash / Pro, billed by usage")
+    console.print("        Sign up: [cyan]https://platform.deepseek.com/api_keys[/cyan]")
 
     while True:
         choice = Prompt.ask(
             "\n[bold]Pick an option[/bold]",
-            choices=["1", "2", "3", "4"],
+            choices=["1", "2", "3", "4", "5"],
             default="1",
         )
         if choice == "1":
@@ -454,6 +468,12 @@ def _ask_provider_wizard() -> tuple[LLMProvider | None, str | None, str | None, 
             return LLMProvider.OPENAI, okey.strip(), None, None
         elif choice == "3":
             return LLMProvider.OLLAMA, None, None, None
+        elif choice == "5":
+            dkey = Prompt.ask("  [bold]Paste your DeepSeek API key[/bold]", password=True)
+            if not dkey.strip():
+                console.print("  [red]API key cannot be empty.[/red]")
+                continue
+            return LLMProvider.DEEPSEEK, dkey.strip(), None, None
         else:
             return None, None, None, None
 
@@ -589,6 +609,27 @@ def _setup_openai() -> AppConfig | None:
     return config
 
 
+def _setup_deepseek() -> AppConfig | None:
+    """Configure DeepSeek through the quick setup menu."""
+    from rich.prompt import Confirm
+
+    console.print("\n  Get your API key at: [cyan]https://platform.deepseek.com/api_keys[/cyan]\n")
+    key = Prompt.ask("  [bold]DeepSeek API key[/bold]", password=True).strip()
+    if not key:
+        console.print("  [yellow]No key entered. Run 'clawed setup' when ready.[/yellow]")
+        return None
+    model = Prompt.ask("  Model", default="deepseek-flash").strip()
+    thinking = Confirm.ask("  Enable thinking mode (additional tokens and latency)?", default=False)
+    effort = Prompt.ask("  Thinking effort", choices=["low", "high", "max"], default="high") if thinking else "high"
+    config = AppConfig.model_validate({
+        "provider": "deepseek", "deepseek_model": model,
+        "deepseek_thinking": thinking, "deepseek_reasoning_effort": effort,
+    })
+    set_api_key("deepseek", key)
+    console.print("  [green]DeepSeek key saved.[/green]")
+    return config
+
+
 def _choose_interface(config: AppConfig) -> str:
     """Step 3 of quick setup: choose Telegram bot or terminal chat."""
     console.print(
@@ -678,8 +719,9 @@ def quick_model_setup() -> str:
     console.print("        Sign up: [cyan]https://platform.openai.com/api-keys[/cyan]")
     console.print("  [bold cyan][6][/bold cyan] Try demo mode \u2014 no API key needed, see example output first")
     console.print("  [bold cyan][7][/bold cyan] Skip \u2014 I'll set this up later\n")
+    console.print("  [bold cyan][8][/bold cyan] DeepSeek \u2014 Flash / Pro, with optional thinking\n")
 
-    choice = Prompt.ask("Choice", choices=["1", "2", "3", "4", "5", "6", "7"], default="1")
+    choice = Prompt.ask("Choice", choices=["1", "2", "3", "4", "5", "6", "7", "8"], default="1")
 
     if choice == "7":
         AppConfig().save()
@@ -697,7 +739,8 @@ def quick_model_setup() -> str:
         return "terminal"
 
     # Configure per provider
-    setup_fns = {"1": _setup_google, "2": _setup_anthropic, "3": _setup_ollama_cloud, "5": _setup_openai}
+    setup_fns = {"1": _setup_google, "2": _setup_anthropic, "3": _setup_ollama_cloud,
+                 "5": _setup_openai, "8": _setup_deepseek}
     config: AppConfig
     if choice == "4":
         config = _setup_local_ollama(local_ollama)
@@ -777,6 +820,8 @@ def run_setup_wizard(reset: bool = False) -> AppConfig:
             provider_label = "Anthropic (Claude)"
         elif detected_provider == LLMProvider.OPENAI:
             provider_label = "OpenAI (GPT)"
+        elif detected_provider == LLMProvider.DEEPSEEK:
+            provider_label = "DeepSeek"
         elif "Cloud" in detect_msg:
             provider_label = "Ollama Cloud"
         else:

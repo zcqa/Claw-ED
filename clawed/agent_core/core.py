@@ -41,6 +41,7 @@ class _LLMClientAdapter:
 
     def __init__(self, config: AppConfig) -> None:
         self._config = config
+        self.native_messages: list[dict[str, Any]] | None = None
 
     async def generate(
         self,
@@ -56,14 +57,24 @@ class _LLMClientAdapter:
         definitions = deepcopy(tools or [])
         if self._config.provider == LLMProvider.OLLAMA:
             return await _call_with_ollama_tools(messages, system, self._config, definitions)
-        return await _call_with_native_tools(messages, system, self._config, definitions)
+        response = await _call_with_native_tools(messages, system, self._config, definitions)
+        if self._config.provider == LLMProvider.DEEPSEEK and response["type"] == "text":
+            self.native_messages = deepcopy(messages) + [{
+                "role": "assistant", "content": response["content"],
+                "deepseek_message": deepcopy(response["deepseek_message"]),
+            }]
+        return response
 
 
 class Gateway:
     """Agent-first Gateway — sits behind the feature-flag shim."""
 
-    def __init__(self, config: AppConfig | None = None, llm: LLMInterface | None = None):
+    def __init__(
+        self, config: AppConfig | None = None, llm: LLMInterface | None = None,
+        reload_config: bool = False,
+    ):
         self.config = config or AppConfig.load()
+        self._reload_config = reload_config
         self._event_bus: asyncio.Queue[ActivityEvent] | None = None
         self.active_sessions: dict[str, dict[str, Any]] = {}
         self._stats = GatewayStats()
@@ -150,6 +161,8 @@ class Gateway:
         transport: str = "cli",
     ) -> GatewayResponse:
         """Process any message from any transport."""
+        if self._reload_config:
+            self.config = AppConfig.load()
         approval_owner = teacher_id
         command = message.strip().split(maxsplit=1)
         if len(command) == 2 and command[0].lower() in ("/approve", "/reject"):
@@ -578,6 +591,7 @@ class Gateway:
         self, message: str, teacher_id: str, progress_callback: Any = None, approval_owner: str | None = None,
     ) -> GatewayResponse:
         """Load context, build prompt, and run the agent tool-use loop."""
+        request_config = self.config
         transport = getattr(self, "_last_transport", "cli")
 
         (teacher_profile, persona_dict, memory_ctx, session_history,
@@ -592,12 +606,12 @@ class Gateway:
 
         system = self._append_kb_and_ingest_status(system, teacher_id)
 
-        agent_name = self.config.agent_name
+        agent_name = request_config.agent_name
 
         # 3. Build AgentContext for tools
         context = AgentContext(
             teacher_id=teacher_id,
-            config=self.config,
+            config=request_config,
             teacher_profile=teacher_profile or {},
             persona=persona_dict,
             session_history=session_history,
@@ -609,7 +623,16 @@ class Gateway:
         )
 
         # 4. Get or create LLM adapter
-        llm = self._llm or _LLMClientAdapter(self.config)
+        llm = self._llm or _LLMClientAdapter(request_config)
+
+        if request_config.provider.value == "deepseek":
+            from clawed.agent_core.memory.sessions import load_native_history
+            from clawed.deepseek import history_key
+
+            # Plain display history loses native reasoning and tool messages.
+            # Its summary is already in the system prompt; replay complete
+            # DeepSeek turns only, scoped to the chosen endpoint/model/mode.
+            session_history = load_native_history(teacher_id, history_key(request_config))
 
         # 5. Run the agent loop
         await self.emit("generation_started", {
@@ -623,11 +646,16 @@ class Gateway:
             context=context,
             llm=llm,
             registry=self._registry,
-            max_iterations=self.config.max_agent_iterations,
+            max_iterations=request_config.max_agent_iterations,
             conversation_history=session_history,
         )
 
         # 6. Save conversation context and episodic memory
+        if isinstance(llm, _LLMClientAdapter) and llm.native_messages is not None:
+            from clawed.agent_core.memory.sessions import save_native_turn
+            from clawed.deepseek import history_key
+
+            save_native_turn(teacher_id, history_key(request_config), llm.native_messages[len(session_history):])
         self._save_post_loop_context(teacher_id, message, result, transport)
 
         return result
@@ -647,6 +675,7 @@ class Gateway:
             "openai": self.config.openai_model,
             "google": self.config.google_model,
             "openrouter": self.config.openrouter_model,
+            "deepseek": self.config.deepseek_model,
         }
         current_model = model_map.get(current, "unknown")
 
@@ -657,6 +686,7 @@ class Gateway:
         buttons = [
             Button(label="Ollama Cloud", callback_data="models:ollama"),
             Button(label="OpenRouter", callback_data="models:openrouter"),
+            Button(label="DeepSeek", callback_data="models:deepseek"),
             Button(label="Anthropic", callback_data="models:anthropic"),
             Button(label="OpenAI", callback_data="models:openai"),
             Button(label="Google", callback_data="models:google"),
@@ -731,6 +761,8 @@ class Gateway:
             if hasattr(cfg, field):
                 setattr(cfg, field, model_name)
             cfg.save()
+
+            self.config = cfg
 
             return GatewayResponse(
                 text=f"Switched to **{model_name}** ({provider}).",

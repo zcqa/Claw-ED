@@ -63,12 +63,7 @@ class TeacherHeader(Static):  # type: ignore[misc]  # Static is Any from textual
         subjects = ", ".join(p.subjects) if p.subjects else "All Subjects"
         grades = f" Gr. {', '.join(p.grade_levels)}" if p.grade_levels else ""
 
-        if cfg.provider.value == "ollama":
-            model = cfg.ollama_model
-        elif cfg.provider.value == "anthropic":
-            model = cfg.anthropic_model
-        else:
-            model = cfg.openai_model
+        model = getattr(cfg, f"{cfg.provider.value}_model", "unknown")
         provider = cfg.provider.value.title()
 
         self.update(

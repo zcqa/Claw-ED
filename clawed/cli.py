@@ -202,12 +202,16 @@ def debug() -> None:
         "google": cfg.google_model,
         "ollama": cfg.ollama_model,
         "openrouter": cfg.openrouter_model,
+        "deepseek": cfg.deepseek_model,
     }
     active_model = model_map.get(provider, "unknown")
     console.print(f"\n  Provider: {provider}")
     console.print(f"  Model: {active_model}")
     if provider == "ollama":
         console.print(f"  Base URL: {cfg.ollama_base_url}")
+    elif provider == "deepseek":
+        console.print(f"  Base URL: {cfg.deepseek_base_url}")
+        console.print(f"  Thinking: {cfg.deepseek_thinking} ({cfg.deepseek_reasoning_effort})")
     console.print(f"  Agent gateway: {cfg.agent_gateway}")
 
     # API key status for the active provider

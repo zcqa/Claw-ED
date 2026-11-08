@@ -72,6 +72,7 @@ def _inject_api_keys() -> None:
         "gemini_api_key": "GEMINI_API_KEY",
         "anthropic_api_key": "ANTHROPIC_API_KEY",
         "ollama_api_key": "OLLAMA_API_KEY",
+        "deepseek_api_key": "DEEPSEEK_API_KEY",
     }
 
     for secret_key, env_var in env_map.items():
@@ -106,6 +107,8 @@ def _build_config(provider: str | None, model: str | None) -> Any:
             config.anthropic_model = model
         elif config.provider == LLMProvider.OPENROUTER:
             config.openrouter_model = model
+        elif config.provider == LLMProvider.DEEPSEEK:
+            config.deepseek_model = model
 
     return config
 
@@ -121,6 +124,7 @@ def _resolve_model(config: Any, model: str | None) -> str:
         LLMProvider.OLLAMA: "ollama_model",
         LLMProvider.ANTHROPIC: "anthropic_model",
         LLMProvider.OPENROUTER: "openrouter_model",
+        LLMProvider.DEEPSEEK: "deepseek_model",
     }
     return getattr(config, _model_fields.get(config.provider, ""), "") or ""
 
@@ -138,6 +142,16 @@ def _convert_messages_for_agent(messages: list[dict[str, Any]]) -> list[dict[str
     for msg in messages:
         role = msg.get("role", "user")
         content = msg.get("content", "")
+        if isinstance(msg.get("deepseek_message"), dict):
+            converted.append({"role": "assistant", "deepseek_message": msg["deepseek_message"]})
+            continue
+        if role == "assistant" and isinstance(content, list):
+            reasoning = "".join(
+                block.get("thinking", "") for block in content
+                if isinstance(block, dict) and block.get("type") == "thinking"
+            )
+        else:
+            reasoning = msg.get("reasoning_content") or ""
 
         # ── User message with structured content (may contain tool_result) ──
         if role == "user" and isinstance(content, list):
@@ -183,6 +197,7 @@ def _convert_messages_for_agent(messages: list[dict[str, Any]]) -> list[dict[str
                     "role": "assistant",
                     "content": None,
                     "tool_calls": tool_calls,
+                    "reasoning_content": reasoning,
                 })
             else:
                 text = "\n".join(
@@ -190,12 +205,14 @@ def _convert_messages_for_agent(messages: list[dict[str, Any]]) -> list[dict[str
                     if isinstance(b, dict) and b.get("type") == "text"
                 )
                 if text:
-                    converted.append({"role": "assistant", "content": text})
+                    converted.append({"role": "assistant", "content": text, "reasoning_content": reasoning})
             continue
 
         # ── Plain string content ──
         if isinstance(content, str) and content:
-            converted.append({"role": role, "content": content})
+            converted.append({"role": role, "content": content, **(
+                {"reasoning_content": reasoning} if role == "assistant" else {}
+            )})
 
     return converted
 
@@ -236,6 +253,11 @@ async def _handle_chat(request: dict[str, Any]) -> dict[str, Any]:
                 messages, system, tools, config, used_model,
             )
         except Exception as exc:
+            if config.provider.value == "deepseek":
+                return {
+                    "status": "error", "content": [], "model": used_model,
+                    "usage": {"input_tokens": 0, "output_tokens": 0}, "error": str(exc),
+                }
             logger.warning(
                 "Tool-calling path failed (%s), falling back to text-only", exc,
             )
@@ -299,48 +321,27 @@ async def _handle_chat_with_tools(
 ) -> dict[str, Any]:
     """Route a tool-capable request through agent.py's native tool functions.
 
-    Sets the module-level ``TOOL_DEFINITIONS`` so that ``_openai_with_tools``
-    and ``_call_with_ollama_tools`` pick up the caller's tool definitions
-    instead of the built-in Claw-ED ones.
+    Passes request-local tool definitions to the selected adapter.
     """
-    import clawed.tools as _tools_mod
     from clawed.agent import (
         _call_with_native_tools,
         _call_with_ollama_tools,
     )
     from clawed.models import LLMProvider
 
-    # Inject the caller's tool definitions into the module-level list that
-    # agent.py reads from.  Save the originals so we can restore them.
-    original_defs = _tools_mod.TOOL_DEFINITIONS
-    try:
-        _tools_mod.TOOL_DEFINITIONS = tools
-
-        # Also patch the reference inside agent.py (it imported at module load)
-        import clawed.agent as _agent_mod
-        _agent_mod.TOOL_DEFINITIONS = tools  # type: ignore[attr-defined]
-
-        # Convert messages from Anthropic content-block format to the
-        # internal dict format that agent.py expects.
-        agent_messages = _convert_messages_for_agent(messages)
-
-        # Route to the right tool-calling function
-        if config.provider in (LLMProvider.ANTHROPIC, LLMProvider.OPENAI, LLMProvider.OPENROUTER):
-            response = await _call_with_native_tools(agent_messages, system, config)
-        else:
-            response = await _call_with_ollama_tools(agent_messages, system, config)
-
-    finally:
-        # Restore original definitions
-        _tools_mod.TOOL_DEFINITIONS = original_defs
-        import clawed.agent as _agent_mod
-        _agent_mod.TOOL_DEFINITIONS = original_defs  # type: ignore[attr-defined]
+    agent_messages = _convert_messages_for_agent(messages)
+    if config.provider == LLMProvider.OLLAMA:
+        response = await _call_with_ollama_tools(agent_messages, system, config, tools)
+    else:
+        response = await _call_with_native_tools(agent_messages, system, config, tools)
 
     # ── Build the response in Anthropic content-block format ───────────
     if response["type"] == "text":
         content_blocks: list[dict[str, Any]] = [
             {"type": "text", "text": response.get("content", "")},
         ]
+        if response.get("deepseek_message", {}).get("reasoning_content"):
+            content_blocks.insert(0, {"type": "thinking", "thinking": response["deepseek_message"]["reasoning_content"]})
         return {
             "status": "success",
             "content": content_blocks,
@@ -352,11 +353,17 @@ async def _handle_chat_with_tools(
                 "output_tokens": len(response.get("content", "").split()),
             },
             "stop_reason": "end_turn",
+            "deepseek_message": response.get("deepseek_message"),
             "error": None,
         }
 
     if response["type"] == "tool_calls":
         content_blocks = []
+        native = response.get("deepseek_message") or {}
+        if native.get("reasoning_content"):
+            content_blocks.append({"type": "thinking", "thinking": native["reasoning_content"]})
+        if native.get("content"):
+            content_blocks.append({"type": "text", "text": native["content"]})
         for tc in response["tool_calls"]:
             content_blocks.append({
                 "type": "tool_use",
@@ -375,6 +382,7 @@ async def _handle_chat_with_tools(
                 "output_tokens": 0,
             },
             "stop_reason": "tool_use",
+            "deepseek_message": response.get("deepseek_message"),
             "error": None,
         }
 

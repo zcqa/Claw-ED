@@ -74,6 +74,7 @@ PROVIDER_TIER_MODELS: dict[str, dict[str, str]] = {
         "work": "gemini-2.5-flash",
         "deep": "gemini-2.5-pro",
     },
+    "deepseek": {"fast": "deepseek-flash", "work": "deepseek-flash", "deep": "deepseek-v4-pro"},
 }
 
 
@@ -107,6 +108,7 @@ def route(task_type: str, config: AppConfig) -> AppConfig:
         LLMProvider.OLLAMA: "ollama_model",
         LLMProvider.GOOGLE: "google_model",
         LLMProvider.OPENROUTER: "openrouter_model",
+        LLMProvider.DEEPSEEK: "deepseek_model",
     }
 
     routed = config.model_copy()

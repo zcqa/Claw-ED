@@ -43,6 +43,12 @@ Run `clawed` for the owned Python interface; Node.js and Bun are no longer requi
 
 [Getting started](docs/GETTING_STARTED.md) · [Troubleshooting](docs/TROUBLESHOOTING.md)
 
+### 中文教学工作台
+
+运行 `clawed serve --host 127.0.0.1 --port 8005`，打开 `http://localhost:8005`。
+中文工作台支持资料上传与预览、三步创建教学材料、后台任务进度、成果下载和
+DeepSeek 模型设置。后台 Worker 默认随服务启动。详见[中文工作台使用说明](docs/WORKBENCH_ZH.md)。
+
 ## What is available today
 
 | Area | What it provides | What to check |
@@ -79,7 +85,16 @@ The worker must be running to process jobs. Completed matching phases survive re
 
 ## Models and privacy
 
-Provider adapters support Anthropic, OpenAI, Google Gemini, Ollama, and OpenRouter. Model support and tool behavior vary by provider and task. API pricing, quotas, and model availability are set by the provider; Claw-ED does not include model usage.
+Provider adapters support Anthropic, OpenAI, Google Gemini, Ollama, OpenRouter, and DeepSeek. Model support and tool behavior vary by provider and task. API pricing, quotas, and model availability are set by the provider; Claw-ED does not include model usage.
+
+To use the official DeepSeek API:
+
+```bash
+clawed config set-key deepseek       # hidden key prompt; or set DEEPSEEK_API_KEY
+clawed config set-model deepseek --model deepseek-flash
+```
+
+DeepSeek supports structured lesson generation, native tools, streaming, and image screening with a vision-capable model. Thinking is off by default; enable it with `clawed config set-model deepseek --thinking --reasoning-effort high`. The dashboard's Settings page exposes the same options. See [DeepSeek configuration](docs/DEEPSEEK.md).
 
 **Start here:** [dated model recommendations and setup](docs/CHOOSING_A_MODEL.md). Try Qwen 3.5 9B locally, GPT-OSS 20B or Gemma 4 31B on OpenRouter for a budget trial, and explicitly select Astra or Fable for premium work. Recommendations are starting points, not measured classroom rankings.
 

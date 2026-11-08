@@ -245,6 +245,12 @@ async def _run_phase(
         "prompt": prompt, "system": system, "schema": model_class.model_json_schema(),
         "provider": client.config.provider.value,
         "model": getattr(client.config, f"{client.config.provider.value}_model"),
+        **({"deepseek": {
+            "base_url": client.config.deepseek_base_url,
+            "thinking": client.config.deepseek_thinking,
+            "reasoning_effort": client.config.deepseek_reasoning_effort,
+            "reasoning_tokens": client.config.deepseek_reasoning_tokens,
+        }} if client.config.provider.value == "deepseek" else {}),
     }, sort_keys=True).encode()).hexdigest() if job else ""
     if job:
         cached = job[0].cached_step(job[1], phase_name, fingerprint)
@@ -258,7 +264,8 @@ async def _run_phase(
                     prompt=prompt, model_class=model_class, system=system,
                     temperature=0.6, max_tokens=4000,
                 ),
-                timeout=_PHASE_TIMEOUT_SEC,
+                timeout=(max(_PHASE_TIMEOUT_SEC, client.config.deepseek_timeout)
+                         if client.config.provider.value == "deepseek" else _PHASE_TIMEOUT_SEC),
             )
             if job:
                 job[0].checkpoint(job[1], phase_name, fingerprint, result.model_dump())

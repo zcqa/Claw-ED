@@ -107,6 +107,12 @@ def _short(text: str, words: int = 12) -> str:
     """
     if not text:
         return ""
+    # Chinese has no whitespace word boundaries. Keep the shared density
+    # limit meaningful for CJK slides instead of treating a paragraph as a word.
+    if any("\u4e00" <= char <= "\u9fff" for char in text):
+        limit = words * 2
+        compact = " ".join(str(text).split())
+        return compact if len(compact) <= limit else compact[:limit].rstrip("，。；、：！？ ") + "…"
     tokens = str(text).split()
     if not tokens:
         return ""

@@ -16,11 +16,19 @@ from clawed.models import AppConfig, LLMProvider
 @config_app.command("set-model")
 def config_set_model(
     provider: str = typer.Argument(
-        ..., help="LLM provider: anthropic, openai, ollama, google, or openrouter"
+        ..., help="LLM provider: anthropic, openai, ollama, google, openrouter, or deepseek"
     ),
     model: str | None = typer.Option(
         None, "--model", "-m", help="Model name override"
     ),
+    base_url: str | None = typer.Option(None, "--base-url", help="DeepSeek base URL"),
+    thinking: bool | None = typer.Option(None, "--thinking/--no-thinking", help="DeepSeek thinking mode"),
+    reasoning_effort: str | None = typer.Option(None, "--reasoning-effort", help="DeepSeek: low, high, or max"),
+    reasoning_tokens: int | None = typer.Option(
+        None, "--reasoning-tokens", min=0, max=131072, help="Extra DeepSeek reasoning token allowance",
+    ),
+    timeout: float | None = typer.Option(None, "--timeout", min=10, max=1800, help="DeepSeek timeout in seconds"),
+    vision_model: str | None = typer.Option(None, "--vision-model", help="Explicit DeepSeek vision model override"),
 ) -> None:
     """Configure the LLM backend."""
     try:
@@ -28,7 +36,7 @@ def config_set_model(
     except ValueError as e:
         console.print(
             f"[red]Unknown provider: {provider}[/red]."
-            " Use: anthropic, openai, ollama, google, openrouter"
+            " Use: anthropic, openai, ollama, google, openrouter, deepseek"
         )
         raise typer.Exit(1) from e
 
@@ -38,6 +46,21 @@ def config_set_model(
     field = f"{llm_provider.value}_model"
     if model:
         setattr(cfg, field, model)
+    deepseek_options = {
+        "deepseek_base_url": base_url, "deepseek_thinking": thinking,
+        "deepseek_reasoning_effort": reasoning_effort, "deepseek_reasoning_tokens": reasoning_tokens,
+        "deepseek_timeout": timeout, "deepseek_vision_model": vision_model,
+    }
+    overrides = {key: value for key, value in deepseek_options.items() if value is not None}
+    if overrides and llm_provider != LLMProvider.DEEPSEEK:
+        raise typer.BadParameter("DeepSeek options require provider deepseek")
+    if overrides:
+        from pydantic import ValidationError
+
+        try:
+            cfg = AppConfig.model_validate({**cfg.model_dump(), **overrides})
+        except ValidationError as exc:
+            raise typer.BadParameter(str(exc)) from exc
     cfg.save()
     model_name = str(getattr(cfg, field))
 
@@ -105,6 +128,15 @@ def config_set_model(
                 "[yellow]Warning: No Anthropic credentials found. "
                 "Set ANTHROPIC_API_KEY or log in to Claude Code.[/yellow]"
             )
+    elif llm_provider == LLMProvider.DEEPSEEK:
+        from clawed.config import get_api_key
+
+        if get_api_key("deepseek"):
+            console.print("[green]DeepSeek credentials found.[/green]")
+        else:
+            console.print("[yellow]Set DEEPSEEK_API_KEY or run: clawed config set-key deepseek[/yellow]")
+        console.print(f"Thinking: {'enabled' if cfg.deepseek_thinking else 'disabled'}; "
+                      f"effort: {cfg.deepseek_reasoning_effort}")
     elif llm_provider == LLMProvider.OPENAI:
         from clawed.config import get_api_key as _get_key
         openai_key: str | None = _get_key("openai")
@@ -117,6 +149,27 @@ def config_set_model(
                 "[yellow]Warning: No OpenAI API key found. "
                 "Set OPENAI_API_KEY or run: clawed config set-key openai YOUR_KEY[/yellow]"
             )
+
+
+@config_app.command("set-key")
+def config_set_key(
+    provider: str = typer.Argument(..., help="LLM provider name"),
+    key: str | None = typer.Argument(None, help="API key; omit to enter it privately"),
+) -> None:
+    """Store a provider key; omitted keys are read through a hidden prompt."""
+    from rich.prompt import Prompt
+
+    from clawed.config import set_api_key
+
+    try:
+        selected = LLMProvider(provider.lower())
+    except ValueError as exc:
+        raise typer.BadParameter(f"Unknown provider: {provider}") from exc
+    value = key if key is not None else Prompt.ask(f"{selected.value.title()} API key", password=True)
+    if not value.strip():
+        raise typer.BadParameter("API key cannot be empty")
+    set_api_key(selected.value, value.strip())
+    console.print(f"[green]{selected.value.title()} API key saved.[/green]")
 
 
 @config_app.command("set-token")
@@ -208,6 +261,12 @@ def config_show(
             f"[bold]Ollama Model:[/bold] {cfg.ollama_model}\n"
             f"[bold]Google Model:[/bold] {cfg.google_model}\n"
             f"[bold]OpenRouter Model:[/bold] {cfg.openrouter_model}\n"
+            f"[bold]DeepSeek Model:[/bold] {cfg.deepseek_model}\n"
+            f"[bold]DeepSeek URL:[/bold] {cfg.deepseek_base_url}\n"
+            f"[bold]DeepSeek Thinking:[/bold] {cfg.deepseek_thinking} ({cfg.deepseek_reasoning_effort})\n"
+            f"[bold]DeepSeek Reasoning Tokens:[/bold] {cfg.deepseek_reasoning_tokens}\n"
+            f"[bold]DeepSeek Timeout:[/bold] {cfg.deepseek_timeout}s\n"
+            f"[bold]DeepSeek Vision Model:[/bold] {cfg.deepseek_vision_model or '(selected model)'}\n"
             f"[bold]Ollama URL:[/bold] {cfg.ollama_base_url}\n"
             f"[bold]Output Dir:[/bold] {cfg.output_dir}\n"
             f"[bold]Export Format:[/bold] {cfg.export_format}\n"

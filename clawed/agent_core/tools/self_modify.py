@@ -62,7 +62,9 @@ class SelfModifyConfigTool:
         # Safety: block dangerous fields
         blocked = {"provider", "anthropic_model", "openai_model", "google_model",
                     "ollama_model", "openrouter_model", "telegram_bot_token",
-                    "ollama_api_key", "dashboard_password"}
+                    "ollama_api_key", "dashboard_password", "deepseek_model", "deepseek_base_url",
+                    "deepseek_thinking", "deepseek_reasoning_effort", "deepseek_reasoning_tokens",
+                    "deepseek_timeout", "deepseek_vision_model"}
         if key in blocked:
             return ToolResult(text=f"Cannot modify '{key}' — use switch_model or configure_profile for auth settings.")
 

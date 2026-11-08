@@ -17,6 +17,7 @@ from clawed.models import AppConfig
 def Gateway(*args: Any, **kwargs: Any) -> Any:  # noqa: N802
     """Factory that returns the appropriate Gateway based on config."""
     config = kwargs.get("config") or (args[0] if args else None)
+    load_saved_config = config is None
     if config is None:
         config = AppConfig.load()
 
@@ -24,6 +25,7 @@ def Gateway(*args: Any, **kwargs: Any) -> Any:  # noqa: N802
         from clawed.agent_core.core import Gateway as AgentGateway
         # Forward extra kwargs (e.g. llm=) to the agent gateway
         fwd = {k: v for k, v in kwargs.items() if k != "config"}
+        fwd.setdefault("reload_config", load_saved_config)
         return AgentGateway(config=config, **fwd)
 
     from clawed._legacy_gateway import Gateway as LegacyGateway

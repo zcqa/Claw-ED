@@ -1,4 +1,4 @@
-"""Unified LLM client supporting Anthropic, OpenAI, and Ollama backends."""
+"""Unified LLM client for Anthropic, OpenAI, Google, Ollama, OpenRouter, and DeepSeek."""
 
 from __future__ import annotations
 
@@ -71,6 +71,8 @@ class LLMClient:
             raw = await self._google(prompt, system, temperature, max_tokens)
         elif self.config.provider == LLMProvider.OPENROUTER:
             raw = await self._openrouter(prompt, system, temperature, max_tokens)
+        elif self.config.provider == LLMProvider.DEEPSEEK:
+            raw = await self._deepseek(prompt, system, temperature, max_tokens, json_mode)
         else:
             raise ValueError(f"Unknown provider: {self.config.provider}")
         return sanitize_text(raw)
@@ -85,7 +87,7 @@ class LLMClient:
         """Stream a text completion token-by-token.
 
         Yields incremental text chunks as the model produces them, so the UI
-        can render the answer live. OpenRouter and Ollama stream natively;
+        can render the answer live. DeepSeek, OpenRouter, and Ollama stream natively;
         other providers fall back to a single yield of the full result.
         """
         from clawed.demo import is_demo_mode
@@ -96,6 +98,16 @@ class LLMClient:
 
         system = self._enrich_system_prompt(system, prompt=prompt)
         provider = self.config.provider
+        if provider == LLMProvider.DEEPSEEK:
+            from clawed.deepseek import build_request, stream_text
+
+            body = build_request(
+                self.config, [{"role": "user", "content": prompt}], system=system,
+                temperature=temperature, max_tokens=max_tokens, stream=True,
+            )
+            async for chunk in stream_text(self.config, body):
+                yield chunk
+            return
         if provider == LLMProvider.OPENROUTER:
             async for chunk in self._openrouter_stream(
                 prompt, system, temperature, max_tokens
@@ -121,6 +133,18 @@ class LLMClient:
         else:
             raise ValueError(f"Unknown provider: {provider}")
         yield sanitize_text(raw)
+
+    async def _deepseek(
+        self, prompt: str, system: str, temperature: float, max_tokens: int,
+        json_mode: bool = False,
+    ) -> str:
+        from clawed.deepseek import build_request, complete
+
+        message = await complete(self.config, build_request(
+            self.config, [{"role": "user", "content": prompt}], system=system,
+            temperature=temperature, max_tokens=max_tokens, json_mode=json_mode,
+        ))
+        return str(message.get("content") or "")
 
     async def _openrouter_stream(
         self, prompt: str, system: str, temperature: float, max_tokens: int
@@ -267,6 +291,22 @@ class LLMClient:
             return await self._vision_openrouter(
                 prompt, b64, media_type, system, temperature, max_tokens,
             )
+        if self.config.provider == LLMProvider.DEEPSEEK:
+            from clawed.deepseek import build_request, complete, vision_available
+
+            model = self.config.deepseek_vision_model or self.config.deepseek_model
+            if not await vision_available(self.config, model):
+                return (
+                    f"REJECT: DeepSeek model {model} does not support vision; "
+                    "explicitly configure deepseek_vision_model to a vision-capable model"
+                )
+            message = await complete(self.config, build_request(
+                self.config, [{"role": "user", "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{b64}"}},
+                ]}], system=system, temperature=temperature, max_tokens=max_tokens, model=model,
+            ))
+            return str(message.get("content") or "")
 
         # Providers without a configured vision adapter cannot screen images.
         return "REJECT: Vision screening is unavailable for this provider"

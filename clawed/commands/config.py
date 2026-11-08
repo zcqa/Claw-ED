@@ -199,6 +199,7 @@ def register_status(app: typer.Typer) -> None:
             "ollama": cfg.ollama_model,
             "google": cfg.google_model,
             "openrouter": cfg.openrouter_model,
+            "deepseek": cfg.deepseek_model,
         }
         model = model_map.get(provider, cfg.openai_model)
 

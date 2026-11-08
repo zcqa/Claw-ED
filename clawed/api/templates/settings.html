@@ -33,6 +33,11 @@
                     <strong>Ollama</strong>
                     <span class="radio-desc">Local &mdash; Free</span>
                 </label>
+                <label class="radio-card{% if config.provider.value == 'deepseek' %} active{% endif %}">
+                    <input type="radio" name="provider" value="deepseek" {% if config.provider.value == 'deepseek' %}checked{% endif %}>
+                    <strong>DeepSeek</strong>
+                    <span class="radio-desc">Flash / Pro &mdash; hosted API</span>
+                </label>
             </div>
         </div>
 
@@ -85,8 +90,64 @@
             </div>
         </div>
 
+        <div class="provider-settings" id="deepseek-settings" {% if config.provider.value != 'deepseek' %}hidden{% endif %}>
+            <div class="form-group">
+                <label for="deepseek-key">API Key</label>
+                <div class="key-input-row">
+                    <input type="password" id="deepseek-key" autocomplete="new-password" placeholder="{{ deepseek_key_masked or 'Enter a DeepSeek API key' }}">
+                    <button type="button" class="btn btn-sm" onclick="this.previousElementSibling.type = this.previousElementSibling.type === 'password' ? 'text' : 'password'">Show</button>
+                </div>
+                <p class="form-hint">Get a key at <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener noreferrer">DeepSeek Platform</a>. Leave blank to keep the saved key.</p>
+            </div>
+            <div class="form-group">
+                <label for="deepseek-model">Model</label>
+                <input type="text" id="deepseek-model" list="deepseek-models" value="{{ config.deepseek_model }}">
+                <datalist id="deepseek-models">
+                    <option value="deepseek-flash"></option>
+                    <option value="deepseek-v4-pro"></option>
+                </datalist>
+                <button type="button" class="btn btn-sm" id="deepseek-refresh-models">Refresh available models</button>
+                <span id="deepseek-models-status" class="form-hint" role="status"></span>
+            </div>
+            <div class="form-group">
+                <label for="deepseek-url">API Base URL</label>
+                <input type="url" id="deepseek-url" value="{{ config.deepseek_base_url }}">
+            </div>
+            <div class="form-group">
+                <label class="toggle-label" for="deepseek-thinking">
+                    <input type="checkbox" id="deepseek-thinking" {% if config.deepseek_thinking %}checked{% endif %}>
+                    Enable thinking mode
+                </label>
+                <p class="form-hint">Thinking uses additional tokens and may take longer. Both modes support tools.</p>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="deepseek-effort">Thinking effort</label>
+                    <select id="deepseek-effort">
+                        {% for effort in ['low', 'high', 'max'] %}
+                        <option value="{{ effort }}" {% if config.deepseek_reasoning_effort == effort %}selected{% endif %}>{{ effort }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="deepseek-reasoning-tokens">Extra thinking tokens</label>
+                    <input type="number" id="deepseek-reasoning-tokens" min="0" max="131072" value="{{ config.deepseek_reasoning_tokens }}">
+                </div>
+                <div class="form-group">
+                    <label for="deepseek-timeout">Request timeout (seconds)</label>
+                    <input type="number" id="deepseek-timeout" min="10" max="1800" value="{{ config.deepseek_timeout }}">
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="deepseek-vision-model">Image screening model (optional)</label>
+                <input type="text" id="deepseek-vision-model" list="deepseek-models" value="{{ config.deepseek_vision_model }}" placeholder="Use the selected model">
+                <p class="form-hint">Flash supports images. If using a text-only model, explicitly select a vision model here to screen lesson images.</p>
+            </div>
+        </div>
+
         <div class="btn-group">
             <button type="button" class="btn" id="test-connection-btn">Test Connection</button>
+            <span class="form-hint">Save changes before checking the connection.</span>
             <div id="connection-status" class="status-box status-inline" hidden></div>
         </div>
 

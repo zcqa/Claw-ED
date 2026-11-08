@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC
 from enum import Enum
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -960,6 +961,7 @@ class LLMProvider(str, Enum):
     OLLAMA = "ollama"
     GOOGLE = "google"
     OPENROUTER = "openrouter"
+    DEEPSEEK = "deepseek"
 
 
 VALID_SUBJECTS = {
@@ -1100,6 +1102,15 @@ class AppConfig(BaseModel):
     openrouter_vision_model: str = ""
     ollama_base_url: str = "http://localhost:11434"
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    deepseek_model: str = "deepseek-flash"
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_thinking: bool = False
+    deepseek_reasoning_effort: Literal["low", "high", "max"] = "high"
+    # Extra output allowance for reasoning, in addition to the requested answer.
+    deepseek_reasoning_tokens: int = Field(default=8192, ge=0, le=131072)
+    deepseek_timeout: float = Field(default=300.0, ge=10, le=1800)
+    # Explicit override for a text-only primary model; never switch silently.
+    deepseek_vision_model: str = ""
     output_dir: str = "~/clawed_output"
     include_homework: bool = True
     agent_gateway: bool = True
@@ -1143,6 +1154,13 @@ class AppConfig(BaseModel):
 
     # Teacher profile — the key to auto-tailoring
     teacher_profile: TeacherProfile = Field(default_factory=TeacherProfile)
+
+    @field_validator("deepseek_base_url")
+    @classmethod
+    def validate_deepseek_base_url(cls, value: str) -> str:
+        from clawed.deepseek import normalize_base_url
+
+        return normalize_base_url(value)
 
     @staticmethod
     def config_path() -> Path:

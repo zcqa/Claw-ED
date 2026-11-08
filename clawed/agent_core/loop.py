@@ -77,6 +77,7 @@ async def run_agent_loop(
                 "tool_calls": tool_calls,
                 "anthropic_content": response.get("anthropic_content"),
                 "response_output": response.get("response_output"),
+                "deepseek_message": response.get("deepseek_message"),
             })
 
             for tc in tool_calls:

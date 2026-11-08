@@ -78,3 +78,7 @@ update_jon_persona.py
 output/
 
 sample_deck/
+
+# Chinese workbench development dependencies
+frontend/node_modules/
+frontend/*.tsbuildinfo

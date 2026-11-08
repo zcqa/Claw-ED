@@ -11,6 +11,34 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+DEEPSEEK_MODELS: list[dict[str, Any]] = [
+    {"name": "deepseek-flash", "tier": "work", "tools": True, "vision": True},
+    {"name": "deepseek-v4-pro", "tier": "deep", "tools": True, "vision": False},
+]
+
+
+def list_deepseek_models(config: Any = None) -> list[dict[str, Any]]:
+    """Discover official model IDs and capabilities; retain a curated offline list."""
+    import httpx
+
+    from clawed.deepseek import normalize_base_url, request_headers
+
+    base = getattr(config, "deepseek_base_url", "https://api.deepseek.com")
+    try:
+        response = httpx.get(
+            f"{normalize_base_url(base)}/models", headers=request_headers(), timeout=15.0,
+        )
+        response.raise_for_status()
+        models = response.json().get("data", [])
+        result = [{
+            **item, "name": item["id"], "display_name": item.get("name", item["id"]),
+            "tools": True, "vision": "image" in (item.get("input_modalities") or []),
+        } for item in models if item.get("id")]
+        return result or [dict(item) for item in DEEPSEEK_MODELS]
+    except (httpx.HTTPError, ValueError, OSError):
+        logger.debug("DeepSeek model discovery unavailable")
+        return [dict(item) for item in DEEPSEEK_MODELS]
+
 
 def list_ollama_models(
     base_url: str = "http://localhost:11434",
@@ -166,6 +194,8 @@ def list_all_models(config: Any = None) -> dict[str, list[dict[str, Any]]]:
         result["openai"] = OPENAI_MODELS
     if get_api_key("google"):
         result["google"] = GOOGLE_MODELS
+    if get_api_key("deepseek") or getattr(getattr(config, "provider", None), "value", None) == "deepseek":
+        result["deepseek"] = list_deepseek_models(config)
 
     # Always show Ollama Cloud catalog — merge with API results
     ollama_catalog = result.get("ollama", [])

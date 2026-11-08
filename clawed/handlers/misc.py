@@ -92,8 +92,10 @@ class ModelSwitchHandler:
                 config.provider = LLMProvider.ANTHROPIC
             elif "openai" in lower:
                 config.provider = LLMProvider.OPENAI
+            elif "deepseek" in lower:
+                config.provider = LLMProvider.DEEPSEEK
             else:
-                return GatewayResponse(text="Supported providers: ollama, anthropic, openai")
+                return GatewayResponse(text="Supported providers: ollama, anthropic, openai, deepseek")
             config.save()
             return GatewayResponse(text=f"Switched to {config.provider.value}.")
         except Exception as e:

@@ -294,6 +294,10 @@ async def _execute_task(task: Task) -> dict[str, Any]:
     payload = task.payload
     config = AppConfig.load()
 
+    if payload.get("workbench") and task.task_type == TaskType.LESSON_BUNDLE:
+        from clawed.workbench import generate_bundle
+        return await generate_bundle(task, config)
+
     if task.task_type == TaskType.LESSON_BUNDLE:
         from clawed.agent_core.context import AgentContext
         from clawed.agent_core.core import Gateway
@@ -379,6 +383,9 @@ async def run_worker(
         once: If True, process one task then return (useful for testing).
     """
     while True:
+        from clawed.workbench import connect
+        with connect() as worker_conn:
+            worker_conn.execute("INSERT OR REPLACE INTO workers VALUES(?,?)", (queue.worker_id, time.time()))
         task = queue.next_queued()
         if task is None:
             if once:
@@ -391,6 +398,8 @@ async def run_worker(
         try:
             while not execution.done():
                 await asyncio.wait({execution}, timeout=min(poll_interval, 2.0))
+                with connect() as worker_conn:
+                    worker_conn.execute("INSERT OR REPLACE INTO workers VALUES(?,?)", (queue.worker_id, time.time()))
                 if not queue.heartbeat(task.id):
                     execution.cancel()
                     break

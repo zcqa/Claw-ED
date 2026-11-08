@@ -497,10 +497,40 @@ document.addEventListener('DOMContentLoaded', function () {
                 document.getElementById('anthropic-settings').hidden = radio.value !== 'anthropic';
                 document.getElementById('openai-settings').hidden = radio.value !== 'openai';
                 document.getElementById('ollama-settings').hidden = radio.value !== 'ollama';
+                document.getElementById('deepseek-settings').hidden = radio.value !== 'deepseek';
             });
         });
 
         // Test connection
+        var deepseekRefresh = document.getElementById('deepseek-refresh-models');
+        if (deepseekRefresh) {
+            deepseekRefresh.addEventListener('click', function () {
+                var status = document.getElementById('deepseek-models-status');
+                deepseekRefresh.disabled = true;
+                status.textContent = 'Loading the saved endpoint catalog...';
+                fetch('/api/settings/deepseek-models').then(function (r) {
+                    return r.json().then(function (data) {
+                        if (!r.ok) throw new Error(data.error || 'Could not load models');
+                        return data;
+                    });
+                }).then(function (data) {
+                    var list = document.getElementById('deepseek-models');
+                    list.replaceChildren();
+                    (data.models || []).forEach(function (model) {
+                        var option = document.createElement('option');
+                        option.value = model.id;
+                        option.label = model.name || model.id;
+                        list.appendChild(option);
+                    });
+                    status.textContent = (data.models || []).length + ' models available';
+                }).catch(function (error) {
+                    status.textContent = error.message;
+                }).finally(function () {
+                    deepseekRefresh.disabled = false;
+                });
+            });
+        }
+
         var testBtn = document.getElementById('test-connection-btn');
         var connStatus = document.getElementById('connection-status');
         if (testBtn) {
@@ -532,6 +562,7 @@ document.addEventListener('DOMContentLoaded', function () {
             var apiKey = '';
             if (provider === 'anthropic') apiKey = document.getElementById('anthropic-key').value;
             else if (provider === 'openai') apiKey = document.getElementById('openai-key').value;
+            else if (provider === 'deepseek') apiKey = document.getElementById('deepseek-key').value;
 
             var body = {
                 provider: provider,
@@ -543,6 +574,15 @@ document.addEventListener('DOMContentLoaded', function () {
                 include_homework: document.getElementById('include-homework').checked,
                 export_format: document.getElementById('export-format').value,
             };
+            if (provider === 'deepseek') {
+                body.deepseek_model = document.getElementById('deepseek-model').value.trim();
+                body.deepseek_base_url = document.getElementById('deepseek-url').value.trim();
+                body.deepseek_thinking = document.getElementById('deepseek-thinking').checked;
+                body.deepseek_reasoning_effort = document.getElementById('deepseek-effort').value;
+                body.deepseek_reasoning_tokens = Number(document.getElementById('deepseek-reasoning-tokens').value);
+                body.deepseek_timeout = Number(document.getElementById('deepseek-timeout').value);
+                body.deepseek_vision_model = document.getElementById('deepseek-vision-model').value.trim();
+            }
 
             var saveStatus = document.getElementById('settings-save-status');
             showStatus(saveStatus, 'Saving...', 'loading');
@@ -553,9 +593,14 @@ document.addEventListener('DOMContentLoaded', function () {
                 body: JSON.stringify(body),
             }).then(function (r) { return r.json(); }).then(function (data) {
                 if (data.status === 'saved') {
+                    if (apiKey) {
+                        var keyInput = document.getElementById(provider + '-key');
+                        keyInput.value = '';
+                        keyInput.placeholder = 'Key saved; leave blank to keep it';
+                    }
                     showStatus(saveStatus, 'Settings saved!', 'success');
                 } else {
-                    showStatus(saveStatus, 'Failed to save', 'error');
+                    showStatus(saveStatus, data.error || 'Failed to save: check the supplied settings', 'error');
                 }
             }).catch(function (err) {
                 showStatus(saveStatus, 'Save failed: ' + err, 'error');

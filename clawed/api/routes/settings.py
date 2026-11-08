@@ -5,11 +5,11 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from clawed import __version__
 from clawed.api.deps import get_db, require_auth
@@ -25,12 +25,20 @@ router = APIRouter(tags=["settings"])
 
 
 class SaveSettingsRequest(BaseModel):
-    provider: str
+    provider: LLMProvider
     api_key: str | None = None
     anthropic_model: str = "claude-sonnet-4-6"
     openai_model: str = "gpt-4o"
     ollama_model: str = "llama3.2"
     ollama_base_url: str = "http://localhost:11434"
+    # Optional fields preserve saved values for older API clients.
+    deepseek_model: str | None = Field(default=None, min_length=1)
+    deepseek_base_url: str | None = None
+    deepseek_thinking: bool | None = None
+    deepseek_reasoning_effort: Literal["low", "high", "max"] | None = None
+    deepseek_reasoning_tokens: int | None = Field(default=None, ge=0, le=131072)
+    deepseek_timeout: float | None = Field(default=None, ge=10, le=1800)
+    deepseek_vision_model: str | None = None
     default_grade: str = ""
     default_subject: str = ""
     include_homework: bool = True
@@ -95,6 +103,15 @@ async def get_settings() -> dict[str, Any]:
         "openai_model": cfg.openai_model,
         "ollama_model": cfg.ollama_model,
         "ollama_base_url": cfg.ollama_base_url,
+        "deepseek_model": cfg.deepseek_model,
+        "deepseek_base_url": cfg.deepseek_base_url,
+        "deepseek_thinking": cfg.deepseek_thinking,
+        "deepseek_reasoning_effort": cfg.deepseek_reasoning_effort,
+        "deepseek_reasoning_tokens": cfg.deepseek_reasoning_tokens,
+        "deepseek_timeout": cfg.deepseek_timeout,
+        "deepseek_vision_model": cfg.deepseek_vision_model,
+        "deepseek_key_masked": mask_api_key(get_api_key("deepseek")),
+        "has_deepseek_key": bool(get_api_key("deepseek")),
         "anthropic_key_masked": mask_api_key(anthropic_key),
         "openai_key_masked": mask_api_key(openai_key),
         "has_anthropic_key": bool(anthropic_key),
@@ -155,6 +172,30 @@ def _validate_ollama_url(raw: str) -> tuple[str | None, str | None]:
     return normalized, None
 
 
+def _validate_deepseek_url(raw: str) -> tuple[str | None, str | None]:
+    """Only official or explicitly allowlisted endpoints may be set over the web."""
+    from urllib.parse import urlsplit
+
+    from clawed.deepseek import normalize_base_url
+
+    try:
+        normalized = normalize_base_url(raw)
+        parsed = urlsplit(normalized)
+        # Accessing port also rejects malformed URLs before persisting them.
+        port = parsed.port
+    except ValueError as exc:
+        return None, str(exc)
+    allowed = {"api.deepseek.com"} | {
+        host.strip().lower() for host in os.environ.get("EDUAGENT_DEEPSEEK_ALLOW_HOSTS", "").split(",")
+        if host.strip()
+    }
+    if parsed.hostname not in allowed:
+        return None, "DeepSeek host must be api.deepseek.com or listed in EDUAGENT_DEEPSEEK_ALLOW_HOSTS"
+    if parsed.hostname == "api.deepseek.com" and port not in {None, 443}:
+        return None, "The official DeepSeek endpoint must use port 443"
+    return normalized, None
+
+
 @router.post("/settings", dependencies=[Depends(require_auth)])
 async def save_settings(req: SaveSettingsRequest) -> Any:
     """Save settings and optionally update API key."""
@@ -164,18 +205,35 @@ async def save_settings(req: SaveSettingsRequest) -> Any:
     cfg.openai_model = req.openai_model
     cfg.ollama_model = req.ollama_model
 
-    # v4.11.2026 SSRF fix: validate and normalize ollama_base_url.
-    normalized_url, err = _validate_ollama_url(req.ollama_base_url)
-    if err or normalized_url is None:
-        return JSONResponse({"error": err or "Invalid URL"}, status_code=400)
-    cfg.ollama_base_url = normalized_url
+    for field in (
+        "deepseek_model", "deepseek_thinking", "deepseek_reasoning_effort",
+        "deepseek_reasoning_tokens", "deepseek_timeout", "deepseek_vision_model",
+    ):
+        value = getattr(req, field)
+        if value is not None:
+            setattr(cfg, field, value.strip() if isinstance(value, str) else value)
+    if not cfg.deepseek_model:
+        return JSONResponse({"error": "DeepSeek model cannot be empty"}, status_code=400)
+    if req.deepseek_base_url is not None or cfg.provider == LLMProvider.DEEPSEEK:
+        deepseek_url, deepseek_error = _validate_deepseek_url(req.deepseek_base_url or cfg.deepseek_base_url)
+        if deepseek_error or deepseek_url is None:
+            return JSONResponse({"error": deepseek_error or "Invalid DeepSeek URL"}, status_code=400)
+        cfg.deepseek_base_url = deepseek_url
+
+    # Validate changed Ollama URLs, or an active Ollama endpoint. An unchanged
+    # inactive cloud URL must not prevent configuring another provider.
+    if cfg.provider == LLMProvider.OLLAMA or req.ollama_base_url != cfg.ollama_base_url:
+        normalized_url, err = _validate_ollama_url(req.ollama_base_url)
+        if err or normalized_url is None:
+            return JSONResponse({"error": err or "Invalid URL"}, status_code=400)
+        cfg.ollama_base_url = normalized_url
 
     cfg.include_homework = req.include_homework
     cfg.export_format = req.export_format
     cfg.save()
 
     if req.api_key and req.api_key.strip():
-        set_api_key(req.provider, req.api_key.strip())
+        set_api_key(req.provider.value, req.api_key.strip())
 
     return {"status": "saved"}
 
@@ -184,8 +242,27 @@ async def save_settings(req: SaveSettingsRequest) -> Any:
 async def test_connection() -> dict[str, Any]:
     """Test the current LLM connection."""
     cfg = AppConfig.load()
+    if cfg.provider == LLMProvider.DEEPSEEK:
+        _, error = _validate_deepseek_url(cfg.deepseek_base_url)
+        if error:
+            return {"connected": False, "provider": "deepseek", "model": cfg.deepseek_model, "error": error}
     result = await test_llm_connection(cfg)
     return result
+
+
+@router.get("/settings/deepseek-models", dependencies=[Depends(require_auth)])
+async def deepseek_models() -> Any:
+    """Read the saved endpoint's real catalog without exposing credentials."""
+    from clawed.deepseek import list_models
+
+    cfg = AppConfig.load()
+    _, error = _validate_deepseek_url(cfg.deepseek_base_url)
+    if error:
+        return JSONResponse({"error": error}, status_code=400)
+    try:
+        return {"models": await list_models(cfg)}
+    except (OSError, RuntimeError, ValueError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
 
 
 @router.post("/settings/clear-content", dependencies=[Depends(require_auth)])

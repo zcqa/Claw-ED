@@ -138,6 +138,7 @@ def get_api_key(provider: str) -> str | None:
         "google": "GOOGLE_API_KEY",
         "ollama": "OLLAMA_API_KEY",
         "openrouter": "OPENROUTER_API_KEY",
+        "deepseek": "DEEPSEEK_API_KEY",
         "telegram": "TELEGRAM_BOT_TOKEN",
         "tavily": "TAVILY_API_KEY",
         "unsplash": "UNSPLASH_ACCESS_KEY",
@@ -182,11 +183,12 @@ def resolve_credentials(config: AppConfig | None = None) -> tuple[str | None, st
         ("OPENAI_API_KEY", "openai"),
         ("GOOGLE_API_KEY", "google"),
         ("OPENROUTER_API_KEY", "openrouter"),
+        ("DEEPSEEK_API_KEY", "deepseek"),
     ]:
         key = os.environ.get(env_var)
         if key:
             return provider, key
-    for provider in ["anthropic", "openai", "google", "openrouter"]:
+    for provider in ["anthropic", "openai", "google", "openrouter", "deepseek"]:
         key = get_api_key(provider)
         if key:
             return provider, key
@@ -277,6 +279,21 @@ async def test_llm_connection(config: AppConfig | None = None) -> dict[str, Any]
         r: dict[str, Any] = {"connected": connected, "provider": provider, "model": model}
         r["error" if is_err else "message"] = msg_or_err
         return r
+
+    if provider == "deepseek":
+        from clawed.deepseek import build_request, complete
+
+        if not get_api_key("deepseek"):
+            return _result(False, cfg.deepseek_model, "No DeepSeek API key configured", is_err=True)
+        try:
+            # A short non-thinking completion verifies access to the selected model.
+            probe = cfg.model_copy(update={"deepseek_thinking": False})
+            await complete(probe, build_request(
+                probe, [{"role": "user", "content": "Reply with OK."}], max_tokens=16,
+            ))
+            return _result(True, cfg.deepseek_model, f"{cfg.deepseek_model} is ready")
+        except Exception as exc:
+            return _result(False, cfg.deepseek_model, str(exc), is_err=True)
 
     if provider == "ollama":
         import httpx

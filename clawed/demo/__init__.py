@@ -41,6 +41,10 @@ def is_demo_mode(config: Any = None) -> bool:
     import os
     if os.environ.get("CLAWED_DEMO", "").strip() in ("1", "true", "yes"):
         return True
+    if getattr(getattr(config, "provider", None), "value", None) == "deepseek":
+        # An explicitly selected hosted provider must report missing credentials,
+        # rather than presenting canned output as a successful provider call.
+        return False
     from clawed.config import resolve_credentials
     provider, _key = resolve_credentials(config)
     return provider is None

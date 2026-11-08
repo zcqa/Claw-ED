@@ -9,6 +9,7 @@ config, units). This module only handles conversation turns.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sqlite3
@@ -110,6 +111,56 @@ def load_recent_for_llm(teacher_id: str, limit: int = 10) -> list[dict[str, Any]
         {"role": t["role"], "content": t["content"]}
         for t in turns
     ]
+
+
+def _ensure_native_table(conn: sqlite3.Connection) -> None:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS native_conversations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            teacher_id TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            messages TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_native_conversations_teacher_scope
+        ON native_conversations(teacher_id, scope, id)
+    """)
+
+
+def save_native_turn(teacher_id: str, scope: str, messages: list[dict[str, Any]]) -> None:
+    """Store complete provider turns without truncating tool results or reasoning.
+
+    Separate from the display transcript, whose text may be shortened or
+    compressed. Retention is bounded by complete turns, never individual
+    tool messages, so no orphaned tool calls are replayed.
+    """
+    if not messages:
+        return
+    with _get_conn() as conn:
+        _ensure_native_table(conn)
+        conn.execute(
+            "INSERT INTO native_conversations (teacher_id, scope, messages) VALUES (?, ?, ?)",
+            (teacher_id, scope, json.dumps(messages, ensure_ascii=False)),
+        )
+        conn.execute(
+            "DELETE FROM native_conversations WHERE teacher_id = ? AND scope = ? AND id NOT IN "
+            "(SELECT id FROM native_conversations WHERE teacher_id = ? AND scope = ? ORDER BY id DESC LIMIT 10)",
+            (teacher_id, scope, teacher_id, scope),
+        )
+
+
+def load_native_history(teacher_id: str, scope: str) -> list[dict[str, Any]]:
+    with _get_conn() as conn:
+        _ensure_native_table(conn)
+        rows = conn.execute(
+            "SELECT messages FROM native_conversations WHERE teacher_id = ? AND scope = ? ORDER BY id",
+            (teacher_id, scope),
+        ).fetchall()
+    history: list[dict[str, Any]] = []
+    for row in rows:
+        history.extend(json.loads(row["messages"]))
+    return history
 
 
 def format_for_prompt(teacher_id: str, limit: int = 10) -> str:

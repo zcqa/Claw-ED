@@ -220,7 +220,7 @@ def _first_run_setup() -> None:
     # Provider selection
     provider_choice = Prompt.ask(
         "Which AI provider do you want to use?",
-        choices=["ollama", "anthropic", "openai"],
+        choices=["ollama", "anthropic", "openai", "deepseek"],
         default="ollama",
     )
 
@@ -228,7 +228,7 @@ def _first_run_setup() -> None:
     cfg.provider = LLMProvider(provider_choice)
 
     # API key for cloud providers
-    if provider_choice in ("anthropic", "openai"):
+    if provider_choice in ("anthropic", "openai", "deepseek"):
         api_key = Prompt.ask(
             f"Enter your {provider_choice.title()} API key",
             password=True,
@@ -325,12 +325,12 @@ def serve(
     if not has_config():
         console.print(
             "[yellow]No configuration found.[/yellow] Run [bold]clawed setup[/bold] first,\n"
-            "or open [cyan]http://localhost:8000/setup[/cyan] after the server starts."
+            f"or open [cyan]http://localhost:{port}/app/settings[/cyan] after the server starts."
         )
     elif not get_api_key(cfg.provider.value) and cfg.provider.value != "ollama":
         console.print(
             f"[yellow]No API key found for {cfg.provider.value}.[/yellow]\n"
-            "Open [cyan]http://localhost:8000/settings[/cyan] to configure, "
+            f"Open [cyan]http://localhost:{port}/app/settings[/cyan] to configure, "
             "or run [bold]clawed setup --reset[/bold]."
         )
 
@@ -351,14 +351,11 @@ def serve(
 
         console.print(
             Panel(
-                f"[bold]Starting Claw-ED web server[/bold]\n"
+                f"[bold]启动 Claw-ED 中文教学工作台[/bold]\n"
                 f"[cyan]http://{host}:{port}[/cyan]\n"
-                f"Dashboard:"
-                f" [cyan]http://{host}:{port}/dashboard[/cyan]\n"
-                f"Generate:"
-                f" [cyan]http://{host}:{port}/generate[/cyan]\n"
-                f"Settings:"
-                f" [cyan]http://{host}:{port}/settings[/cyan]",
+                f"创建教学材料: [cyan]http://{host}:{port}/app/create[/cyan]\n"
+                f"教学资料: [cyan]http://{host}:{port}/app/materials[/cyan]\n"
+                f"模型设置: [cyan]http://{host}:{port}/app/settings[/cyan]",
                 title="Claw-ED Server",
                 border_style="green",
             )

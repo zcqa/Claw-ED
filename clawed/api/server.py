@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html as html_mod
+import asyncio
 import json
 import logging
 import os
@@ -76,11 +77,24 @@ def _check_page_auth(request: Request) -> bool:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Startup/shutdown lifecycle."""
     set_db(Database())
-    yield
-    db = get_db()
-    if db:
-        db.close()
-    set_db(None)
+    from clawed.task_queue import TaskQueue, run_worker
+
+    queue = TaskQueue()
+    worker = None
+    if os.environ.get("CLAWED_WEB_WORKER", "1") != "0":
+        worker = asyncio.create_task(run_worker(queue), name="workbench-worker")
+    try:
+        yield
+    finally:
+        if worker is not None:
+            worker.cancel()
+            with suppress(asyncio.CancelledError):
+                await worker
+        queue.close()
+        db = get_db()
+        if db:
+            db.close()
+        set_db(None)
 
 
 # ── Decomposed helpers ──────────────────────────────────────────────
@@ -141,6 +155,8 @@ def _register_api_routes(app: FastAPI) -> None:
     from clawed.api.routes.school import router as school_router
     from clawed.api.routes.settings import router as settings_router
     from clawed.api.routes.tools import router as tools_router
+    from clawed.api.routes.workbench import router as workbench_router
+    app.include_router(workbench_router, prefix="/api")
     app.include_router(jobs_router, prefix="/api")
     app.include_router(ingest_router, prefix="/api")
     app.include_router(generate_router, prefix="/api")
@@ -508,6 +524,7 @@ async def _page_settings(request: Request, templates: Jinja2Templates) -> HTMLRe
         "persona": persona_data,
         "anthropic_key_masked": mask_api_key(get_api_key("anthropic")),
         "openai_key_masked": mask_api_key(get_api_key("openai")),
+        "deepseek_key_masked": mask_api_key(get_api_key("deepseek")),
         "states": list_states(),
         "teacher_state": teacher_state,
         "teacher_subjects": teacher_subjects,
@@ -991,6 +1008,8 @@ def create_app() -> FastAPI:
 
     templates = _configure_middleware(app)
     _register_api_routes(app)
+    from clawed.api.workbench_ui import mount_workbench
+    mount_workbench(app)
     _register_page_routes(app, templates)
     _register_classroom_endpoints(app)
     _register_community_endpoints(app, templates)
