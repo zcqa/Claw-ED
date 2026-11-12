@@ -137,14 +137,30 @@ def get_api_token() -> str:
     return _get_or_create_token()
 
 
-async def require_auth(request: Request) -> None:
-    """Accept explicit bearer auth or the dashboard's same-origin session cookie.
+def authentication_required() -> bool:
+    """Authentication is opt-in for the local workbench; keep token mode available."""
+    return os.environ.get("CLAWED_REQUIRE_AUTH", "0").strip().lower() in {"1", "true", "yes", "on"}
 
-    Localhost requests (127.0.0.1) bypass auth when
-    EDUAGENT_LOCAL_AUTH_BYPASS=1 is set.
+
+async def require_auth(request: Request) -> None:
+    """Enforce token authentication only when CLAWED_REQUIRE_AUTH is enabled.
+
+    Token mode accepts bearer auth or the dashboard's same-origin session cookie.
+    EDUAGENT_LOCAL_AUTH_BYPASS remains an explicit localhost exception.
 
     v4.11.2026: uses secrets.compare_digest for timing-safe comparison.
     """
+    if not authentication_required():
+        # Skipping login does not allow another website to submit browser mutations.
+        if request.method not in {"GET", "HEAD", "OPTIONS"}:
+            from urllib.parse import urlsplit
+            origin = request.headers.get("origin")
+            if origin is None and request.headers.get("referer"):
+                referer = urlsplit(request.headers["referer"])
+                origin = f"{referer.scheme}://{referer.netloc}"
+            if origin is not None and origin != f"{request.url.scheme}://{request.url.netloc}":
+                raise HTTPException(status_code=403, detail="Same-origin request required")
+        return
     # Optional localhost bypass (also covers test clients)
     if os.environ.get("EDUAGENT_LOCAL_AUTH_BYPASS") == "1":
         client_ip = request.client.host if request.client else ""

@@ -30,6 +30,8 @@ class BundleJobRequest(BaseModel):
     outputs: list[Literal["teacher", "student", "slides"]] = Field(default_factory=lambda: ["teacher", "student", "slides"])
     include_images: bool = False
     include_homework: bool = True
+    teacher_template_id: str = Field(default="", max_length=32)
+    student_template_id: str = Field(default="", max_length=32)
 
 
 @router.get("/jobs")
@@ -57,12 +59,21 @@ async def submit_job(req: BundleJobRequest) -> dict[str, str]:
             raise HTTPException(400, "请至少选择一种输出文件。")
         for material_id in req.material_ids:
             item = material_get(material_id)
-            if not item or item["status"] != "ready":
-                raise HTTPException(400, "所选资料尚未解析完成或不存在。")
+            if not item or item.get('deleted') or item["status"] != "ready":
+                raise HTTPException(400, "所选资料已删除、尚未解析完成或不存在，请重新选择。")
         req.outputs = list(dict.fromkeys(req.outputs))
     queue = TaskQueue()
     try:
-        return {"id": queue.submit(TaskType.LESSON_BUNDLE, req.model_dump()), "status": "queued"}
+        payload = req.model_dump()
+        if req.workbench:
+            from clawed.word_templates import freeze_template
+            try:
+                payload["word_templates"] = {role: freeze_template(tid, role)
+                    for role in ("teacher", "student")
+                    if role in req.outputs and (tid := getattr(req, role + "_template_id"))}
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+        return {"id": queue.submit(TaskType.LESSON_BUNDLE, payload), "status": "queued"}
     finally:
         queue.close()
 

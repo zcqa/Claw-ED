@@ -46,8 +46,11 @@ Run `clawed` for the owned Python interface; Node.js and Bun are no longer requi
 ### 中文教学工作台
 
 运行 `clawed serve --host 127.0.0.1 --port 8005`，打开 `http://localhost:8005`。
-中文工作台支持资料上传与预览、三步创建教学材料、后台任务进度、成果下载和
+中文工作台支持资料上传与预览、单页创建教学材料、后台任务进度、成果下载和
 DeepSeek 模型设置。后台 Worker 默认随服务启动。详见[中文工作台使用说明](docs/WORKBENCH_ZH.md)。
+
+Word 支持带占位符的模板，以及从普通学校教案中提取可复用模板。模型按所选模板
+栏目组织内容，未选择模板时使用默认格式。详见 [Word 模板说明](docs/WORD_TEMPLATES_ZH.md)。
 
 ## What is available today
 

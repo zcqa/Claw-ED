@@ -15,6 +15,10 @@ def teaching_text(text: str) -> str:
         "REMEMBER": "请注意", "Use these sentence starters:": "可参考以下句式："}
     for phrase, translated in {"I Do": "教师示范", "We Do": "师生共练", "You Do": "独立练习"}.items():
         text = re.sub(r"[（(]\s*" + re.escape(phrase) + r"\s*[）)]", f"（{translated}）", text)
+    text = re.sub(r"\bI Do\s*/\s*We Do\s*/\s*You Do\b", "教师示范 / 师生共练 / 独立练习", text, flags=re.I)
+    text = re.sub(r"\bIEP(?=\s*学生)", "需要个别化支持的", text)
+    text = re.sub(r"\bELL(?=\s*学生)", "需要语言支持的", text)
+    text = text.replace("出口条", "课堂检测单")
     for phrase, translated in sorted(labels.items(), key=lambda row: len(row[0]), reverse=True):
         text = re.sub(r"(?<![A-Za-z])" + re.escape(phrase) + r"(?![A-Za-z])", translated, text, flags=re.I)
     return text

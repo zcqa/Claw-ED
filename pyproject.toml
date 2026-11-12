@@ -44,6 +44,8 @@ dependencies = [
     # license compatibility with our declared MIT license.
     "pypdf>=6.10.2,<7.0",
     "python-docx>=1.0.0,<2.0",
+    # Word template rendering; upstream docxtpl is LGPL-2.1-only.
+    "docxtpl>=0.20.2,<0.21",
     "python-pptx>=0.6.21,<2.0",
     "lxml>=4.9.0,<7.0",
     # 4.4.10 imports rl_extended_literal_eval from reportlab.lib.utils where

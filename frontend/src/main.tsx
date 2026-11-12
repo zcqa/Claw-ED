@@ -51,6 +51,8 @@ import {
   Eye,
   EyeOff,
   Zap,
+  Trash2,
+  Undo2,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import {
@@ -65,6 +67,8 @@ import {
 } from "./api";
 import type { Job, Material, Output, Overview, Settings } from "./api";
 import "./style.css";
+import { TemplateLibrary, TemplateSelect } from "./templates";
+import type { WordTemplate } from "./templates";
 
 const AppContext = createContext<{
   overview: Overview | null;
@@ -73,6 +77,7 @@ const AppContext = createContext<{
 }>({ overview: null, refresh: () => {}, notify: () => {} });
 function useLoad<T>(path: string, interval = 0) {
   const [data, setData] = useState<T | null>(null);
+  const [dataPath, setDataPath] = useState(path);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [version, setVersion] = useState(0);
@@ -88,11 +93,16 @@ function useLoad<T>(path: string, interval = 0) {
       try {
         const result = await api<T>(path);
         if (active) {
+          setDataPath(path);
           setData(result);
           setError("");
         }
       } catch (e) {
-        if (active) setError((e as Error).message);
+        if (active) {
+          setDataPath(path);
+          setData(null);
+          setError((e as Error).message);
+        }
       } finally {
         busy = false;
         if (active) setLoading(false);
@@ -107,7 +117,12 @@ function useLoad<T>(path: string, interval = 0) {
       window.clearInterval(timer);
     };
   }, [path, interval, version]);
-  return { data, error, loading, reload };
+  return {
+    data: dataPath === path ? data : null,
+    error: dataPath === path ? error : "",
+    loading: dataPath !== path || loading,
+    reload,
+  };
 }
 const navItems: [string, string, LucideIcon][] = [
   ["", "工作台", LayoutDashboard],
@@ -448,21 +463,23 @@ function App() {
               {overview.data?.teacher_name || "老师"}
               <small>我的教学工作台</small>
             </div>
-            <button
-              className="icon-button"
-              title="退出登录"
-              aria-label="退出登录"
-              onClick={async () => {
-                try {
-                  await api("/workbench/session", { method: "DELETE" });
-                  setAuth(true);
-                } catch (e) {
-                  notify((e as Error).message, true);
-                }
-              }}
-            >
-              <LogOut size={16} />
-            </button>
+            {overview.data?.auth_required && (
+              <button
+                className="icon-button"
+                title="退出登录"
+                aria-label="退出登录"
+                onClick={async () => {
+                  try {
+                    await api("/workbench/session", { method: "DELETE" });
+                    setAuth(true);
+                  } catch (e) {
+                    notify((e as Error).message, true);
+                  }
+                }}
+              >
+                <LogOut size={16} />
+              </button>
+            )}
           </div>
         </div>
       </aside>
@@ -888,6 +905,8 @@ type Draft = {
   outputs: Output[];
   include_images: boolean;
   include_homework: boolean;
+  teacher_template_id: string;
+  student_template_id: string;
 };
 const initialDraft: Draft = {
   topic: "",
@@ -900,8 +919,11 @@ const initialDraft: Draft = {
   outputs: ["teacher", "student", "slides"],
   include_images: false,
   include_homework: true,
+  teacher_template_id: "",
+  student_template_id: "",
 };
 function CreatePage() {
+  const templates = useLoad<WordTemplate[]>("/workbench/templates");
   const { overview, notify, refresh } = useContext(AppContext);
   const materials = useLoad<Material[]>("/workbench/materials");
   const [draft, setDraft] = useState<Draft>(() => {
@@ -1170,6 +1192,34 @@ function CreatePage() {
                     ),
                   )}
                 </div>
+                <div className="section-heading">
+                  <div>
+                    <h2>选择 Word 模板</h2>
+                    <p>模板决定栏目和内容组织方式；未选择时使用默认格式。</p>
+                  </div>
+                </div>
+                {templates.error ? (
+                  <ErrorBox text={templates.error} retry={templates.reload} />
+                ) : (
+                  <div className="form-grid">
+                    {(["teacher", "student"] as const)
+                      .filter((role) => draft.outputs.includes(role))
+                      .map((role) => (
+                        <TemplateSelect
+                          key={role}
+                          role={role}
+                          value={draft[`${role}_template_id`]}
+                          templates={templates.data || []}
+                          onChange={(value) =>
+                            update(`${role}_template_id`, value)
+                          }
+                        />
+                      ))}
+                  </div>
+                )}
+                <Link to="/app/materials?tab=templates" className="text-button">
+                  上传与管理 Word 模板 <ArrowRight size={15} />
+                </Link>
                 <label className="check-row">
                   <input
                     type="checkbox"
@@ -1236,6 +1286,16 @@ function CreatePage() {
               {draft.outputs.map((v) => outputNames[v]).join("、") ||
                 "请至少选择一种材料"}
             </p>
+            <p>
+              教案格式：
+              {templates.data?.find((t) => t.id === draft.teacher_template_id)
+                ?.name || "默认格式"}
+            </p>
+            <p>
+              讲义格式：
+              {templates.data?.find((t) => t.id === draft.student_template_id)
+                ?.name || "默认格式"}
+            </p>
             <p className="field-hint">已自动保存本页草稿</p>
             {!overview?.has_key && (
               <p className="error-box">
@@ -1272,13 +1332,73 @@ function CreatePage() {
 }
 
 function MaterialsPage() {
-  const materials = useLoad<Material[]>("/workbench/materials");
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { notify } = useContext(AppContext);
+  const templates =
+    new URLSearchParams(location.search).get("tab") === "templates";
+  return (
+    <>
+      <div className="tabs material-tabs">
+        <button
+          className={!templates ? "active" : ""}
+          onClick={() => navigate("/app/materials")}
+        >
+          课程资料
+        </button>
+        <button
+          className={templates ? "active" : ""}
+          onClick={() => navigate("/app/materials?tab=templates")}
+        >
+          Word 模板
+        </button>
+      </div>
+      {templates ? (
+        <TemplateLibrary
+          notify={notify}
+          initialId={new URLSearchParams(location.search).get("template") || ""}
+        />
+      ) : (
+        <CourseMaterialsPage />
+      )}
+    </>
+  );
+}
+function CourseMaterialsPage() {
+  const navigate = useNavigate();
+  const [trash, setTrash] = useState(false);
+  const materials = useLoad<Material[]>(
+    "/workbench/materials" + (trash ? "?trash=true" : ""),
+  );
   const { notify, refresh } = useContext(AppContext);
   const [search, setSearch] = useState(""),
     [busy, setBusy] = useState(false),
     [drag, setDrag] = useState(false),
     [preview, setPreview] = useState<Material | null>(null);
   const input = useRef<HTMLInputElement>(null);
+  const [managing, setManaging] = useState(""),
+    [removed, setRemoved] = useState<Material | null>(null);
+  const manage = async (item: Material, deleted: boolean) => {
+    setManaging(item.id);
+    try {
+      await api(`/workbench/materials/${item.id}/visibility`, {
+        method: "POST",
+        body: JSON.stringify({ deleted }),
+      });
+      setRemoved(deleted ? item : null);
+      materials.reload();
+      refresh();
+      notify(
+        deleted
+          ? "资料已移至回收站，历史任务和成果保留。"
+          : "资料已恢复，可以重新选择使用。",
+      );
+    } catch (e) {
+      notify((e as Error).message, true);
+    } finally {
+      setManaging("");
+    }
+  };
   const close = useCallback(() => setPreview(null), []);
   const upload = async (files: FileList | null) => {
     if (!files?.length || busy) return;
@@ -1325,16 +1445,18 @@ function MaterialsPage() {
       <PageHeader
         eyebrow="让资料成为备课的起点"
         title="教学资料"
-        description="整理教材、已有课件和讲义，在创建任务时选择需要参考的内容。"
+        description="整理教材、已有课件和讲义，作为课程内容参考。Word 格式模板请在另一个分类中管理。"
         action={
-          <button
-            className="button primary"
-            disabled={busy}
-            onClick={() => input.current?.click()}
-          >
-            <Plus size={18} />
-            上传资料
-          </button>
+          !trash ? (
+            <button
+              className="button primary"
+              disabled={busy}
+              onClick={() => input.current?.click()}
+            >
+              <Plus size={18} />
+              上传资料
+            </button>
+          ) : undefined
         }
       />
       <input
@@ -1346,40 +1468,79 @@ function MaterialsPage() {
         aria-label="选择教学资料文件"
         onChange={(e) => void upload(e.target.files)}
       />
-      <button
-        className={`upload-zone ${drag ? "drag" : ""} ${busy ? "busy" : ""}`}
-        disabled={busy}
-        onClick={() => input.current?.click()}
-        onDragOver={(e) => {
-          e.preventDefault();
-          setDrag(true);
-        }}
-        onDragLeave={() => setDrag(false)}
-        onDrop={(e) => {
-          e.preventDefault();
-          setDrag(false);
-          void upload(e.dataTransfer.files);
-        }}
-      >
-        <span className="upload-symbol">
-          {busy ? <Loader2 size={28} className="spin" /> : <Upload size={28} />}
-        </span>
-        <h2>{busy ? "正在上传并解析资料…" : "拖拽文件到这里，或点击上传"}</h2>
-        <p>
-          {busy
-            ? "正在提取文档中的文字，请保持页面打开。"
-            : "支持 PDF、Word、PowerPoint、TXT 和 Markdown"}
-        </p>
-        <span>单份文件不超过 50 MB，每次最多 20 份</span>
-      </button>
+      {!trash && (
+        <button
+          className={`upload-zone ${drag ? "drag" : ""} ${busy ? "busy" : ""}`}
+          disabled={busy}
+          onClick={() => input.current?.click()}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDrag(true);
+          }}
+          onDragLeave={() => setDrag(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDrag(false);
+            void upload(e.dataTransfer.files);
+          }}
+        >
+          <span className="upload-symbol">
+            {busy ? (
+              <Loader2 size={28} className="spin" />
+            ) : (
+              <Upload size={28} />
+            )}
+          </span>
+          <h2>{busy ? "正在上传并解析资料…" : "拖拽文件到这里，或点击上传"}</h2>
+          <p>
+            {busy
+              ? "正在提取文档中的文字，请保持页面打开。"
+              : "支持 PDF、Word、PowerPoint、TXT 和 Markdown"}
+          </p>
+          <span>单份文件不超过 50 MB，每次最多 20 份</span>
+        </button>
+      )}
+      <div className="button-row library-tabs">
+        <button
+          className={`button ${!trash ? "primary" : "secondary"}`}
+          disabled={busy || !!managing}
+          onClick={() => setTrash(false)}
+        >
+          课程资料
+        </button>
+        <button
+          className={`button ${trash ? "primary" : "secondary"}`}
+          disabled={busy || !!managing}
+          onClick={() => setTrash(true)}
+        >
+          <Trash2 size={17} />
+          回收站
+        </button>
+      </div>
+      {removed && (
+        <div className="notice soft">
+          <span>已删除“{removed.name}”，可在回收站恢复。</span>
+          <button
+            className="text-button"
+            disabled={!!managing}
+            onClick={() => void manage(removed, false)}
+          >
+            撤销删除
+          </button>
+        </div>
+      )}
       <section className="panel">
         <div className="panel-heading">
           <div>
             <h2>
-              我的资料{" "}
+              {trash ? "资料回收站" : "我的资料"}{" "}
               <span className="count">{materials.data?.length || 0}</span>
             </h2>
-            <p>上传后自动解析，原文件也会保留在本机。</p>
+            <p>
+              {trash
+                ? "恢复后即可重新用于备课；历史任务仍可读取原资料。"
+                : "上传后自动解析，可删除不再使用的资料。"}
+            </p>
           </div>
           <div className="search-field">
             <Search size={17} />
@@ -1397,11 +1558,19 @@ function MaterialsPage() {
           <Spinner />
         ) : !filtered.length ? (
           <Empty
-            title={search ? "没有找到匹配的资料" : "给你的工作台添加第一份资料"}
+            title={
+              search
+                ? "没有找到匹配的资料"
+                : trash
+                  ? "回收站为空"
+                  : "给你的工作台添加第一份资料"
+            }
             description={
               search
                 ? "试试其他关键词。"
-                : "上传教材或讲义，让 AI 根据你的课程内容设计材料。"
+                : trash
+                  ? "删除的课程资料会出现在这里，可随时恢复。"
+                  : "上传教材或讲义，让 AI 根据你的课程内容设计材料。"
             }
           />
         ) : (
@@ -1473,6 +1642,28 @@ function MaterialsPage() {
                         >
                           查看
                         </button>
+                        {item.kind === "docx" && !trash && (
+                          <button
+                            className="text-button"
+                            onClick={async () => {
+                              try {
+                                const template = await api<{ id: string }>(
+                                  `/workbench/templates/from-material/${item.id}`,
+                                  { method: "POST" },
+                                );
+                                notify("已复制到模板库，原课程资料保留。");
+                                navigate(
+                                  "/app/materials?tab=templates&template=" +
+                                    template.id,
+                                );
+                              } catch (e) {
+                                notify((e as Error).message, true);
+                              }
+                            }}
+                          >
+                            存为 Word 模板
+                          </button>
+                        )}
                         <a
                           className="icon-button"
                           title="下载原文件"
@@ -1481,6 +1672,15 @@ function MaterialsPage() {
                         >
                           <ArrowDownToLine size={17} />
                         </a>
+                        <button
+                          className={`text-button ${trash ? "" : "danger-text"}`}
+                          aria-label={`${trash ? "恢复" : "删除"}${item.name}`}
+                          disabled={busy || !!managing}
+                          onClick={() => void manage(item, !trash)}
+                        >
+                          {trash ? <Undo2 size={16} /> : <Trash2 size={16} />}{" "}
+                          {trash ? "恢复" : "删除"}
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -1766,6 +1966,49 @@ function ContentValue({
   depth?: number;
 }) {
   if (value === null || value === undefined || value === "") return null;
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const block = value as { kind?: string; text?: string; rows?: string[][] };
+    if (
+      ["paragraph", "heading", "formula", "table"].includes(block.kind || "")
+    ) {
+      if (block.kind === "table")
+        return (
+          <div className="template-content-table">
+            {block.text && <p>{block.text}</p>}
+            <table>
+              <tbody>
+                {block.rows?.map((row, i) => (
+                  <tr key={i}>
+                    {row.map((text, j) => (
+                      <td key={j}>{text}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+      if (block.kind === "heading") return <h4>{block.text}</h4>;
+      return (
+        <p
+          className={block.kind === "formula" ? "template-formula" : "pre-wrap"}
+        >
+          {block.text}
+        </p>
+      );
+    }
+    if (
+      Object.keys(value).length &&
+      Object.keys(value).every((k) => /^s\d+$/.test(k))
+    )
+      return (
+        <>
+          {Object.values(value).map((v, i) => (
+            <ContentValue key={i} value={v} depth={depth} />
+          ))}
+        </>
+      );
+  }
   if (Array.isArray(value))
     return (
       <div className="content-items">
@@ -1820,6 +2063,13 @@ function JobDetail() {
     job = useLoad<Job>("/workbench/jobs/" + id, 5000),
     { notify, refresh } = useContext(AppContext);
   const navigate = useNavigate();
+  const templates = useLoad<WordTemplate[]>("/workbench/templates");
+  const [reexportOpen, setReexportOpen] = useState(false);
+  const [exportTemplates, setExportTemplates] = useState({
+    teacher: "__original__",
+    student: "__original__",
+  });
+  const closeReexport = useCallback(() => setReexportOpen(false), []);
   const [busy, setBusy] = useState(false),
     [tab, setTab] = useState("overview");
   if (job.error)
@@ -1872,22 +2122,7 @@ function JobDetail() {
               <button
                 className="button secondary"
                 disabled={busy}
-                onClick={async () => {
-                  setBusy(true);
-                  try {
-                    const next = await api<{ id: string }>(
-                      `/workbench/jobs/${id}/reexport`,
-                      { method: "POST" },
-                    );
-                    notify("已按现有教学方案重新导出，无需再次调用文本模型。");
-                    navigate("/app/jobs/" + next.id);
-                    refresh();
-                  } catch (e) {
-                    notify((e as Error).message, true);
-                  } finally {
-                    setBusy(false);
-                  }
-                }}
+                onClick={() => setReexportOpen(true)}
               >
                 重新导出文件
               </button>
@@ -1929,7 +2164,7 @@ function JobDetail() {
       </div>
       {item.payload.reuse_task_id && (
         <p className="field-hint">
-          本次复用已有教学方案重新导出。
+          本次以已有教学方案为基础重新导出。
           <Link to={"/app/jobs/" + item.payload.reuse_task_id}>查看原任务</Link>
         </p>
       )}
@@ -1988,10 +2223,26 @@ function JobDetail() {
                         .map((role) => outputNames[role as Output])
                         .join("、")}
                     </dd>
+                    {item.payload.word_templates &&
+                      Object.keys(item.payload.word_templates).length > 0 && (
+                        <>
+                          <dt>Word 模板版本</dt>
+                          <dd>
+                            {Object.entries(item.payload.word_templates).map(
+                              ([role, t]) => (
+                                <p key={role}>
+                                  {role === "teacher" ? "教师教案" : "学生讲义"}
+                                  ：{t.name} · 第 {t.version} 版
+                                </p>
+                              ),
+                            )}
+                          </dd>
+                        </>
+                      )}
                     <dt>教学要求</dt>
                     <dd className="pre-wrap">
                       {item.payload.requirements ||
-                        "根据课程主题合理设计教学内容。"}
+                        "根据课程主题合理设计教学目标与活动。"}
                     </dd>
                     <dt>参考资料</dt>
                     <dd>
@@ -2037,6 +2288,8 @@ function JobDetail() {
                       <span>以下为本次生成的教学草稿，请核对后使用。</span>
                     </div>
                     {[
+                      "模板教学方案",
+                      "默认产物教学方案",
                       "objective",
                       "minute_by_minute",
                       "vocabulary",
@@ -2060,7 +2313,7 @@ function JobDetail() {
                       )
                       .map((key) => (
                         <section className="lesson-section" key={key}>
-                          <h2>{contentLabels[key]}</h2>
+                          <h2>{contentLabels[key] || key}</h2>
                           <ContentValue value={content[key]} />
                         </section>
                       ))}
@@ -2173,6 +2426,75 @@ function JobDetail() {
           </div>
         </aside>
       </div>
+      {reexportOpen && (
+        <Modal title="重新导出与更换模板" close={closeReexport}>
+          <div className="manage-content">
+            <p>
+              沿用同一模板规则时可复用内容；更换栏目结构或填写要求时，模型会重新组织对应内容。
+            </p>
+            {templates.error && (
+              <ErrorBox text={templates.error} retry={templates.reload} />
+            )}
+            {(["teacher", "student"] as const)
+              .filter((role) =>
+                (
+                  item.payload.outputs || ["teacher", "student", "slides"]
+                ).includes(role),
+              )
+              .map((role) => (
+                <TemplateSelect
+                  key={role}
+                  role={role}
+                  templates={templates.data || []}
+                  value={exportTemplates[role]}
+                  onChange={(value) =>
+                    setExportTemplates((v) => ({ ...v, [role]: value }))
+                  }
+                  original
+                />
+              ))}
+            <div className="button-row">
+              <button
+                className="button secondary"
+                disabled={busy}
+                onClick={closeReexport}
+              >
+                取消
+              </button>
+              <button
+                className="button primary"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  try {
+                    const body = Object.fromEntries(
+                      Object.entries(exportTemplates)
+                        .filter(([, v]) => v !== "__original__")
+                        .map(([role, v]) => [role + "_template_id", v]),
+                    );
+                    const next = await api<{ id: string }>(
+                      `/workbench/jobs/${id}/reexport`,
+                      { method: "POST", body: JSON.stringify(body) },
+                    );
+                    setReexportOpen(false);
+                    notify(
+                      "已创建导出任务，将复用适用的内容并按所选模板处理。",
+                    );
+                    navigate("/app/jobs/" + next.id);
+                    refresh();
+                  } catch (e) {
+                    notify((e as Error).message, true);
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                {busy ? "正在创建…" : "开始重新导出"}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </>
   );
 }

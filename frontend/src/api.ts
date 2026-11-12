@@ -27,6 +27,9 @@ export type Job = {
     content?: string;
     material_ids?: string[];
     reuse_task_id?: string;
+    teacher_template_id?: string;
+    student_template_id?: string;
+    word_templates?: Record<string, { name: string; version: number }>;
   };
   result: {
     files?: string[];
@@ -43,6 +46,7 @@ export type Job = {
   materials?: { id: string; name: string }[];
 };
 export type Overview = {
+  auth_required: boolean;
   provider: string;
   model: string;
   has_key: boolean;

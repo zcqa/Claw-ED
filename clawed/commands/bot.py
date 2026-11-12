@@ -309,14 +309,15 @@ def serve(
     if host not in ("127.0.0.1", "localhost", "::1"):
         console.print(
             f"[bold yellow]WARNING:[/bold yellow] Binding to [bold]{host}[/bold]. "
-            "The web API has basic auth but is designed for localhost use. "
-            "Use a reverse proxy (nginx, caddy) for production exposure."
+            "The web API is designed for localhost use. "
+            "Configure authentication and a reverse proxy for production exposure."
         )
 
-    # Print auth token for API access
-    from clawed.api.deps import get_api_token
-    api_token = get_api_token()
-    console.print(f"API token: [bold]{api_token}[/bold]")
+    from clawed.api.deps import authentication_required, get_api_token
+    if authentication_required():
+        console.print(f"API token: [bold]{get_api_token()}[/bold]")
+    else:
+        console.print("[green]工作台已跳过登录认证，可直接进入。[/green]")
 
     cfg = AppConfig.load()
 

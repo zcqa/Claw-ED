@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from clawed.api.deps import get_api_token, limiter, require_auth
+from clawed.api.deps import authentication_required, get_api_token, limiter, require_auth
 from clawed.config import get_api_key, mask_api_key, set_api_key, test_llm_connection
 from clawed.models import AppConfig, LLMProvider
 from clawed.task_queue import TaskQueue
@@ -32,6 +32,8 @@ class LoginRequest(BaseModel):
 @router.post("/session")
 @limiter.limit("10/minute")
 async def login(request: Request, body: LoginRequest) -> JSONResponse:
+    if not authentication_required():
+        return JSONResponse({"status": "ok", "auth_required": False})
     if not secrets.compare_digest(body.token.strip().encode(), get_api_token().encode()):
         raise HTTPException(401, "访问令牌不正确，请检查后重试。")
     response = JSONResponse({"status": "ok"})
@@ -60,6 +62,7 @@ async def overview() -> dict[str, Any]:
     with connect() as conn:
         workers = conn.execute("SELECT count(*) FROM workers WHERE heartbeat>?", (time.time() - 30,)).fetchone()[0]
     return {
+        "auth_required": authentication_required(),
         "provider": cfg.provider.value, "model": getattr(cfg, f"{cfg.provider.value}_model"),
         "has_key": bool(get_api_key(cfg.provider.value)) or cfg.provider == LLMProvider.OLLAMA,
         "worker_online": bool(workers), "materials": len(material_list()),
@@ -72,8 +75,21 @@ async def overview() -> dict[str, Any]:
 
 
 @router.get("/materials", dependencies=auth)
-async def materials() -> list[dict[str, Any]]:
-    return material_list()
+async def materials(trash: bool = False) -> list[dict[str, Any]]:
+    return material_list(trash=trash)
+
+
+class MaterialVisibilityRequest(BaseModel):
+    deleted: bool
+
+
+@router.post('/materials/{material_id}/visibility', dependencies=auth)
+async def material_visibility(material_id: str, body: MaterialVisibilityRequest):
+    if not material_get(material_id): raise HTTPException(404,'资料不存在。')
+    with connect() as conn:
+        conn.execute('INSERT INTO material_visibility(material_id,deleted) VALUES(?,?) '
+            'ON CONFLICT(material_id) DO UPDATE SET deleted=excluded.deleted',(material_id,int(body.deleted)))
+    return {'status':'deleted' if body.deleted else 'restored'}
 
 
 @router.post("/materials", dependencies=auth)
@@ -156,6 +172,18 @@ async def job_detail(task_id: str) -> dict[str, Any]:
         root = Path(AppConfig.load().output_dir).expanduser().resolve() / task_id
         master = root / "master.json"
         result["content"] = json.loads(master.read_text(encoding="utf-8")) if master.is_file() else None
+        template_file = root / "template_content.json"
+        if template_file.is_file():
+            documents = json.loads(template_file.read_text(encoding="utf-8")).get("documents", {})
+            for doc in documents.values():
+                for field in doc.get('template',{}).get('spec',{}).get('fields',[]):
+                    if field.get('kind')=='rows' and field.get('label') in doc['display']:
+                        labels={column['key']:column['label'] for column in field.get('columns',[])}
+                        value=doc['display'][field['label']]
+                        if isinstance(value,list):
+                            doc['display'][field['label']]=[{labels.get(k,k):v for k,v in row.items()} if isinstance(row,dict) else row for row in value]
+            contents = {"教师教案" if role == "teacher" else "学生讲义": doc["display"] for role, doc in documents.items()}
+            result["content"] = {"模板教学方案": contents, **({"默认产物教学方案": result["content"]} if result["content"] else {})}
         result["materials"] = [
             {"id": item["id"], "name": item["name"]}
             for mid in task.payload.get("material_ids", []) if (item := material_get(mid)) is not None
@@ -206,8 +234,13 @@ async def manage_job(task_id: str, body: ManageRequest) -> dict[str, str]:
         queue.close()
 
 
+class ReexportRequest(BaseModel):
+    teacher_template_id: str | None = Field(default=None, max_length=32)
+    student_template_id: str | None = Field(default=None, max_length=32)
+
+
 @router.post("/jobs/{task_id}/reexport", dependencies=auth)
-async def reexport_job(task_id: str) -> dict[str, str]:
+async def reexport_job(task_id: str, body: ReexportRequest | None = None) -> dict[str, str]:
     from clawed.task_queue import TaskType
     queue = TaskQueue()
     try:
@@ -217,9 +250,24 @@ async def reexport_job(task_id: str) -> dict[str, str]:
         if task.status.value in {"queued", "running", "cancel_requested"}:
             raise HTTPException(409, "请等待任务结束后重新导出。")
         path = Path(AppConfig.load().output_dir).expanduser().resolve() / task.id / "master.json"
-        if not path.is_file():
+        if not path.is_file() and not path.with_name("template_content.json").is_file():
             raise HTTPException(404, "教学方案不存在，请重新生成。")
         payload = {**task.payload, "reuse_task_id": task.id}
+        if body:
+            from clawed.word_templates import freeze_template
+            snapshots = dict(payload.get("word_templates", {}))
+            for role in ("teacher", "student"):
+                tid = getattr(body, role + "_template_id")
+                if tid is not None and role in payload["outputs"]:
+                    payload[role + "_template_id"] = tid
+                    try:
+                        if tid:
+                            snapshots[role] = freeze_template(tid, role)
+                        else:
+                            snapshots.pop(role, None)
+                    except ValueError as exc:
+                        raise HTTPException(400, str(exc)) from exc
+            payload["word_templates"] = snapshots
         return {"id": queue.submit(TaskType.LESSON_BUNDLE, payload), "status": "queued"}
     finally:
         queue.close()

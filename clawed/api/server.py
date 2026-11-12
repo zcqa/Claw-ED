@@ -54,8 +54,10 @@ def _check_page_auth(request: Request) -> bool:
     """
     import secrets as _secrets
 
-    from clawed.api.deps import get_api_token
+    from clawed.api.deps import authentication_required, get_api_token
 
+    if not authentication_required():
+        return True
     token = get_api_token()
     # Check cookie (primary method — set via POST /api/auth/bootstrap)
     cookie_val = request.cookies.get("clawed_token", "")
@@ -80,6 +82,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from clawed.task_queue import TaskQueue, run_worker
 
     queue = TaskQueue()
+    from clawed.word_templates import database as template_database
+    from clawed.workbench import connect as workbench_connect
+    template_database()
+    with workbench_connect() as conn:
+        conn.execute("UPDATE word_templates SET status='review',error='服务重启中断了提取，请重新理解全文并提取。',analysis_json=? WHERE status='analyzing'",
+            ('{"phase":"interrupted","message":"服务已重启，可重新开始提取"}',))
     worker = None
     if os.environ.get("CLAWED_WEB_WORKER", "1") != "0":
         worker = asyncio.create_task(run_worker(queue), name="workbench-worker")
@@ -156,7 +164,9 @@ def _register_api_routes(app: FastAPI) -> None:
     from clawed.api.routes.settings import router as settings_router
     from clawed.api.routes.tools import router as tools_router
     from clawed.api.routes.workbench import router as workbench_router
+    from clawed.api.routes.word_templates import router as word_templates_router
     app.include_router(workbench_router, prefix="/api")
+    app.include_router(word_templates_router, prefix="/api")
     app.include_router(jobs_router, prefix="/api")
     app.include_router(ingest_router, prefix="/api")
     app.include_router(generate_router, prefix="/api")
