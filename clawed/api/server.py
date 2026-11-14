@@ -85,7 +85,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from clawed.word_templates import database as template_database
     from clawed.workbench import connect as workbench_connect
     template_database()
+    from clawed.presenton import database as ppt_database
+    ppt_database()
     with workbench_connect() as conn:
+        conn.execute("UPDATE ppt_templates SET status='review',error='服务重启中断了页面状态更新，可重新提取以获取原任务进度。' WHERE status='analyzing'")
         conn.execute("UPDATE word_templates SET status='review',error='服务重启中断了提取，请重新理解全文并提取。',analysis_json=? WHERE status='analyzing'",
             ('{"phase":"interrupted","message":"服务已重启，可重新开始提取"}',))
     worker = None
@@ -165,6 +168,8 @@ def _register_api_routes(app: FastAPI) -> None:
     from clawed.api.routes.tools import router as tools_router
     from clawed.api.routes.workbench import router as workbench_router
     from clawed.api.routes.word_templates import router as word_templates_router
+    from clawed.api.routes.ppt import router as ppt_router
+    app.include_router(ppt_router, prefix="/api")
     app.include_router(workbench_router, prefix="/api")
     app.include_router(word_templates_router, prefix="/api")
     app.include_router(jobs_router, prefix="/api")

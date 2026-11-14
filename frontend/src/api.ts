@@ -29,6 +29,7 @@ export type Job = {
     reuse_task_id?: string;
     teacher_template_id?: string;
     student_template_id?: string;
+    ppt_template_id?: string;
     word_templates?: Record<string, { name: string; version: number }>;
   };
   result: {

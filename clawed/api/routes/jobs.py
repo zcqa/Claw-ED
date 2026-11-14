@@ -32,6 +32,7 @@ class BundleJobRequest(BaseModel):
     include_homework: bool = True
     teacher_template_id: str = Field(default="", max_length=32)
     student_template_id: str = Field(default="", max_length=32)
+    ppt_template_id: str = Field(default="", max_length=32)
 
 
 @router.get("/jobs")
@@ -71,6 +72,9 @@ async def submit_job(req: BundleJobRequest) -> dict[str, str]:
                 payload["word_templates"] = {role: freeze_template(tid, role)
                     for role in ("teacher", "student")
                     if role in req.outputs and (tid := getattr(req, role + "_template_id"))}
+                if "slides" in req.outputs and req.ppt_template_id:
+                    from clawed.presenton import freeze_template as freeze_ppt
+                    payload["ppt_template"] = freeze_ppt(req.ppt_template_id)
             except ValueError as exc:
                 raise HTTPException(400, str(exc)) from exc
         return {"id": queue.submit(TaskType.LESSON_BUNDLE, payload), "status": "queued"}

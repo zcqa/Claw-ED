@@ -69,6 +69,8 @@ import type { Job, Material, Output, Overview, Settings } from "./api";
 import "./style.css";
 import { TemplateLibrary, TemplateSelect } from "./templates";
 import type { WordTemplate } from "./templates";
+import { PptSelect, PptTemplateLibrary, PptViewer } from "./ppt";
+import type { PptTemplate } from "./ppt";
 
 const AppContext = createContext<{
   overview: Overview | null;
@@ -907,6 +909,7 @@ type Draft = {
   include_homework: boolean;
   teacher_template_id: string;
   student_template_id: string;
+  ppt_template_id: string;
 };
 const initialDraft: Draft = {
   topic: "",
@@ -921,9 +924,11 @@ const initialDraft: Draft = {
   include_homework: true,
   teacher_template_id: "",
   student_template_id: "",
+  ppt_template_id: "",
 };
 function CreatePage() {
   const templates = useLoad<WordTemplate[]>("/workbench/templates");
+  const pptTemplates = useLoad<PptTemplate[]>("/workbench/ppt/templates");
   const { overview, notify, refresh } = useContext(AppContext);
   const materials = useLoad<Material[]>("/workbench/materials");
   const [draft, setDraft] = useState<Draft>(() => {
@@ -1220,6 +1225,33 @@ function CreatePage() {
                 <Link to="/app/materials?tab=templates" className="text-button">
                   上传与管理 Word 模板 <ArrowRight size={15} />
                 </Link>
+                {draft.outputs.includes("slides") && (
+                  <>
+                    <div className="section-heading">
+                      <div>
+                        <h2>选择 PPT 模板</h2>
+                        <p>
+                          按课程与模板组织每页内容；未选择时使用课堂清晰版。
+                        </p>
+                      </div>
+                    </div>
+                    {pptTemplates.error ? (
+                      <ErrorBox
+                        text={pptTemplates.error}
+                        retry={pptTemplates.reload}
+                      />
+                    ) : (
+                      <PptSelect
+                        templates={pptTemplates.data || []}
+                        value={draft.ppt_template_id}
+                        onChange={(value) => update("ppt_template_id", value)}
+                      />
+                    )}
+                    <Link to="/app/materials?tab=ppt" className="text-button">
+                      上传与管理 PPT 模板 <ArrowRight size={15} />
+                    </Link>
+                  </>
+                )}
                 <label className="check-row">
                   <input
                     type="checkbox"
@@ -1236,9 +1268,9 @@ function CreatePage() {
                     checked={draft.include_images}
                     onChange={(e) => update("include_images", e.target.checked)}
                   />
-                  检索教学配图
+                  检索 Word 教学配图
                   <span className="muted">
-                    会增加生成时间，需要模型支持图片审核
+                    用于默认格式教案与讲义；PPT 保留模板自带图片
                   </span>
                 </label>
               </>
@@ -1337,11 +1369,12 @@ function MaterialsPage() {
   const { notify } = useContext(AppContext);
   const templates =
     new URLSearchParams(location.search).get("tab") === "templates";
+  const ppt = new URLSearchParams(location.search).get("tab") === "ppt";
   return (
     <>
       <div className="tabs material-tabs">
         <button
-          className={!templates ? "active" : ""}
+          className={!templates && !ppt ? "active" : ""}
           onClick={() => navigate("/app/materials")}
         >
           课程资料
@@ -1352,8 +1385,16 @@ function MaterialsPage() {
         >
           Word 模板
         </button>
+        <button
+          className={ppt ? "active" : ""}
+          onClick={() => navigate("/app/materials?tab=ppt")}
+        >
+          PPT 模板
+        </button>
       </div>
-      {templates ? (
+      {ppt ? (
+        <PptTemplateLibrary notify={notify} />
+      ) : templates ? (
         <TemplateLibrary
           notify={notify}
           initialId={new URLSearchParams(location.search).get("template") || ""}
@@ -2064,10 +2105,12 @@ function JobDetail() {
     { notify, refresh } = useContext(AppContext);
   const navigate = useNavigate();
   const templates = useLoad<WordTemplate[]>("/workbench/templates");
+  const pptTemplates = useLoad<PptTemplate[]>("/workbench/ppt/templates");
   const [reexportOpen, setReexportOpen] = useState(false);
   const [exportTemplates, setExportTemplates] = useState({
     teacher: "__original__",
     student: "__original__",
+    ppt: "__original__",
   });
   const closeReexport = useCallback(() => setReexportOpen(false), []);
   const [busy, setBusy] = useState(false),
@@ -2194,6 +2237,11 @@ function JobDetail() {
               {[
                 ["overview", "任务概览"],
                 ["content", "教学内容"],
+                ...((
+                  item.payload.outputs || ["teacher", "student", "slides"]
+                ).includes("slides")
+                  ? [["ppt", "课件预览"]]
+                  : []),
                 [
                   "files",
                   `生成文件${files.length ? ` · ${files.length}` : ""}`,
@@ -2279,6 +2327,14 @@ function JobDetail() {
                     </div>
                   )}
                 </>
+              )}
+              {tab === "ppt" && (
+                <PptViewer
+                  key={item.id}
+                  taskId={item.id}
+                  notify={notify}
+                  active={active}
+                />
               )}
               {tab === "content" &&
                 (content ? (
@@ -2453,6 +2509,18 @@ function JobDetail() {
                   original
                 />
               ))}
+            {(
+              item.payload.outputs || ["teacher", "student", "slides"]
+            ).includes("slides") && (
+              <PptSelect
+                templates={pptTemplates.data || []}
+                value={exportTemplates.ppt}
+                original
+                onChange={(value) =>
+                  setExportTemplates((v) => ({ ...v, ppt: value }))
+                }
+              />
+            )}
             <div className="button-row">
               <button
                 className="button secondary"

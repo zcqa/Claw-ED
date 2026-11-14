@@ -237,6 +237,7 @@ async def manage_job(task_id: str, body: ManageRequest) -> dict[str, str]:
 class ReexportRequest(BaseModel):
     teacher_template_id: str | None = Field(default=None, max_length=32)
     student_template_id: str | None = Field(default=None, max_length=32)
+    ppt_template_id: str | None = Field(default=None, max_length=32)
 
 
 @router.post("/jobs/{task_id}/reexport", dependencies=auth)
@@ -253,6 +254,7 @@ async def reexport_job(task_id: str, body: ReexportRequest | None = None) -> dic
         if not path.is_file() and not path.with_name("template_content.json").is_file():
             raise HTTPException(404, "教学方案不存在，请重新生成。")
         payload = {**task.payload, "reuse_task_id": task.id}
+        payload.pop("ppt_edit", None)
         if body:
             from clawed.word_templates import freeze_template
             snapshots = dict(payload.get("word_templates", {}))
@@ -268,6 +270,16 @@ async def reexport_job(task_id: str, body: ReexportRequest | None = None) -> dic
                     except ValueError as exc:
                         raise HTTPException(400, str(exc)) from exc
             payload["word_templates"] = snapshots
+            if body.ppt_template_id is not None and "slides" in payload["outputs"]:
+                from clawed.presenton import freeze_template as freeze_ppt
+                payload["ppt_template_id"] = body.ppt_template_id
+                try:
+                    if body.ppt_template_id:
+                        payload["ppt_template"] = freeze_ppt(body.ppt_template_id)
+                    else:
+                        payload.pop("ppt_template", None)
+                except ValueError as exc:
+                    raise HTTPException(400, str(exc)) from exc
         return {"id": queue.submit(TaskType.LESSON_BUNDLE, payload), "status": "queued"}
     finally:
         queue.close()

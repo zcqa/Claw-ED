@@ -116,6 +116,9 @@ async def generate_bundle(task: Any, config: AppConfig) -> dict[str, Any]:
     from clawed.task_queue import current_task
 
     payload = task.payload
+    if payload.get("ppt_edit"):
+        from clawed.ppt_generation import edit_deck
+        return await edit_deck(task, config)
     output = Path(config.output_dir).expanduser().resolve() / task.id
     output.mkdir(parents=True, exist_ok=True)
     selected = [material_get(item) for item in payload.get("material_ids", [])]
@@ -243,6 +246,8 @@ async def generate_bundle(task: Any, config: AppConfig) -> dict[str, Any]:
         warnings.append("部分参考引文未与资料原文连续匹配，请在使用前核对来源和表述。")
     images: dict[str, Path] = {}
     if payload.get("include_images"):
+        if "slides" in payload["outputs"]:
+            warnings.append("检索配图用于默认格式 Word；PPT 使用模板自带图片与版式，不自动添加未经确认的网络图片。")
         event(task.id, "images", "正在检索并审核教学配图")
         try:
             from clawed.image_pipeline import fetch_all_images
@@ -250,10 +255,10 @@ async def generate_bundle(task: Any, config: AppConfig) -> dict[str, Any]:
         except Exception:
             warnings.append("配图获取未完成，已继续导出文字内容。")
     from functools import partial
-    from clawed.compile_workbench import compile_slides, compile_word, course_filename
+    from clawed.compile_workbench import compile_word, course_filename
 
     compilers = {"teacher": (partial(compile_word, teacher=True), "教师教案.docx"),
-                 "student": (partial(compile_word, teacher=False), "学生讲义.docx"), "slides": (compile_slides, "教学课件.pptx")}
+                 "student": (partial(compile_word, teacher=False), "学生讲义.docx"), "slides": (None, "教学课件.pptx")}
     files, required, errors = list(template_result["files"]), dict(template_result["required_outputs"]), list(template_result["errors"])
     for role in payload["outputs"]:
         if role in payload.get("word_templates", {}):
@@ -261,7 +266,11 @@ async def generate_bundle(task: Any, config: AppConfig) -> dict[str, Any]:
         compiler, name = compilers[role]
         event(task.id, "export", f"正在生成{name}")
         try:
-            path = Path(await compiler(master, images, output))
+            if role == "slides":
+                from clawed.ppt_generation import compile_slides as generate_ppt
+                path = await generate_ppt(task, master, cfg, output)
+            else:
+                path = Path(await compiler(master, images, output))
             destination = output / course_filename(payload["topic"], name)
             if path != destination:
                 destination.write_bytes(path.read_bytes())
@@ -269,7 +278,7 @@ async def generate_bundle(task: Any, config: AppConfig) -> dict[str, Any]:
             required[role] = str(destination)
         except Exception as exc:
             logger.exception("Workbench export failed for %s", role)
-            errors.append(f"{name}导出失败：{type(exc).__name__}")
+            errors.append(f"{name}导出失败：{str(exc) if isinstance(exc, ValueError) else type(exc).__name__}")
     manifest = output / "资料来源.json"
     manifest.write_text(json.dumps([item.model_dump() for item in sources], ensure_ascii=False, indent=2), encoding="utf-8")
     event(task.id, "complete" if not errors else "failed", "文件已生成，请查看并审核" if not errors else "部分文件未能导出，可恢复任务重试")
