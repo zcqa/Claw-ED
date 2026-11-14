@@ -23,7 +23,7 @@ def _rect(x: float, y: float, w: float, h: float, color: str) -> dict:
 def classroom_layouts() -> dict:
     def page(key: str, description: str, elements: list[dict], *, cover: bool = False) -> dict:
         title = _text("title", 76, 66 if not cover else 146, 1110, 114,
-                      48 if not cover else 64, 32 if not cover else 25,
+                      40 if not cover else 64, 64 if not cover else 25,
                       bold=True, color="#184D78")
         return {"id": key, "description": description,
                 "components": [{"id": "page", "description": description,
@@ -40,10 +40,10 @@ def classroom_layouts() -> dict:
         page("lesson_explanation", "概念说明与小结。单栏大字号。公式应单独选择公式讲解版式，无统计图表。", [
             _text("body", 80, 224, 1110, 420, 32, 260),
         ]),
-        page("lesson_equation", "公式、推导与计算解析。公式独立占一个区域，禁止把数学表达式混在长段落中。保留全部数字与单位。", [
+        page("lesson_equation", "适用于至多两行的独立公式与简短代入计算。多行代码、伪代码请使用代码讲解版式。保留数字与单位。", [
             _text("explanation_without_formulas", 80, 224, 1110, 126, 32, 110),
             _rect(68, 370, 1124, 150, "#EAF0F7"),
-            _text("equation", 94, 390, 1060, 112, 38, 260),
+            _text("equation", 94, 390, 1060, 112, 38, 120),
             _text("interpretation", 80, 558, 1110, 94, 30, 85),
         ]),
         page("lesson_comparison", "适用于两个概念或方法的对照。两栏各讲一个明确内容，禁止虚构数据或指标。", [
@@ -57,6 +57,11 @@ def classroom_layouts() -> dict:
             _text("question", 80, 228, 1100, 276, 34, 185),
             _rect(68, 534, 1124, 120, "#EAF0F7"),
             _text("student_directions", 94, 554, 1060, 90, 28, 90),
+        ]),
+        page("lesson_code", "代码或算法伪代码讲解。正文区支持至多10行代码，保留原有缩进和步骤；顶部用一句话说明代码作用。代码过长时分成几个逻辑部分展示。", [
+            _text("explanation", 80, 218, 1110, 78, 28, 80),
+            _rect(68, 312, 1124, 344, "#EAF0F7"),
+            _text("code", 94, 326, 1060, 318, 24, 650),
         ]),
     ]
     cells = []

@@ -429,6 +429,7 @@ type DeckView = {
   template_name?: string;
   slides?: {
     index: number;
+    chapter_title?: string;
     title: string;
     notes: string;
     content: Record<string, unknown>;
@@ -534,6 +535,7 @@ export function PptViewer({
                   <h3>
                     第 {index + 1} 页 · {slide.title}
                   </h3>
+                  {slide.chapter_title && <p className="muted">所属章节：{slide.chapter_title}</p>}
                   {imageError ? (
                     <div className="notice warning">
                       页面预览暂未完成，可刷新重试，或下载 PPTX 查看。

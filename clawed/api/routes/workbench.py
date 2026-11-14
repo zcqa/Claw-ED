@@ -172,6 +172,22 @@ async def job_detail(task_id: str) -> dict[str, Any]:
         root = Path(AppConfig.load().output_dir).expanduser().resolve() / task_id
         master = root / "master.json"
         result["content"] = json.loads(master.read_text(encoding="utf-8")) if master.is_file() else None
+        adaptive = bool(result["content"] and result["content"].get("schema_version") == "adaptive-v1")
+        ppt_first = bool(result["content"] and result["content"].get("schema_version") == "ppt-first-v1")
+        if adaptive:
+            from clawed.teaching_content import TeachingContent, content_display
+            result["content"] = content_display(TeachingContent.model_validate(result["content"]))
+        elif ppt_first:
+            material = result["content"]
+            brief = material["task"]
+            result["content"] = {"任务说明": {"主题": brief["topic"], "教学对象": brief["audience"],
+                "时长": f"{brief['duration_minutes']} 分钟", "教学要求": brief["requirements"]},
+                "课件内容": [{"页码": i+1, "标题": p["title"], "学生可见内容": p["content"],
+                    "教师备注": p["teacher_notes"]} for i,p in enumerate(material["slides"])]}
+        elif not result["content"] and (root / "plan.json").is_file():
+            plan = json.loads((root / "plan.json").read_text(encoding="utf-8"))
+            result["content"] = {"章节规划": [{"章节": c["title"], "安排时间": f"{c['minutes']} 分钟",
+                "本章作用": c["purpose"], "内容要点": c["key_points"]} for c in plan["chapters"]]}
         template_file = root / "template_content.json"
         if template_file.is_file():
             documents = json.loads(template_file.read_text(encoding="utf-8")).get("documents", {})
@@ -183,7 +199,8 @@ async def job_detail(task_id: str) -> dict[str, Any]:
                         if isinstance(value,list):
                             doc['display'][field['label']]=[{labels.get(k,k):v for k,v in row.items()} if isinstance(row,dict) else row for row in value]
             contents = {"教师教案" if role == "teacher" else "学生讲义": doc["display"] for role, doc in documents.items()}
-            result["content"] = {"模板教学方案": contents, **({"默认产物教学方案": result["content"]} if result["content"] else {})}
+            result["content"] = ({**result["content"], "模板文档内容": contents} if adaptive or ppt_first else
+                {"模板教学方案": contents, **({"默认产物教学方案": result["content"]} if result["content"] else {})})
         result["materials"] = [
             {"id": item["id"], "name": item["name"]}
             for mid in task.payload.get("material_ids", []) if (item := material_get(mid)) is not None

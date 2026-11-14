@@ -1567,6 +1567,12 @@ dl dd:last-child {
   gap: 25px;
   align-items: start;
 }
+.detail-grid.ppt-focused {
+  grid-template-columns: minmax(0, 1fr);
+}
+.detail-grid.ppt-focused > aside {
+  display: none;
+}
 .content-tabs {
   padding: 13px 26px 0;
   border-bottom: 1px solid var(--border);

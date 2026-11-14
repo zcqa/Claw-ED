@@ -213,6 +213,13 @@ class TaskQueue:
         )
         conn.commit()
 
+    def publish_result(self, task_id: str, result: dict[str, Any]) -> None:
+        """Expose saved files while optional outputs are still being generated."""
+        conn = self._get_conn()
+        conn.execute("UPDATE tasks SET result_json=? WHERE id=? AND worker_id=? AND status IN ('running','cancel_requested')",
+                     (json.dumps(result, ensure_ascii=False), task_id, self.worker_id))
+        conn.commit()
+
     def cached_step(self, task_id: str, name: str, fingerprint: str) -> dict[str, Any] | None:
         row = self._get_conn().execute(
             "SELECT result_json FROM task_steps WHERE task_id = ? AND name = ? AND fingerprint = ?",

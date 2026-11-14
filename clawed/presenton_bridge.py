@@ -155,6 +155,8 @@ def compact_paragraphs(value):
         equation = result.get("equation")
         if isinstance(equation, str) and re.search(r"\\[a-zA-Z]+", equation) and "<latex>" not in equation:
             result["equation"] = "<latex>" + equation + "</latex>"
+        if isinstance(result.get("code"), str):
+            result["code"] = re.sub(r"(?m)^[ \t]+", lambda m: m[0].replace("\t", "    ").replace(" ", "\u00a0"), result["code"])
         return result
     if isinstance(value, list):
         return [compact_paragraphs(item) for item in value]

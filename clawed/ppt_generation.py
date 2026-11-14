@@ -1,4 +1,4 @@
-"""Template-aware classroom slide planning and recoverable engine operations."""
+"""Presenton owns presentation planning, content and multi-region layout."""
 from __future__ import annotations
 
 import asyncio
@@ -7,21 +7,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field
-
 from clawed.presenton import Engine, engine_lock
 from clawed.workbench import event
-
-
-class SlidePlan(BaseModel):
-    title: str = Field(min_length=1, max_length=70)
-    purpose: str = Field(min_length=1, max_length=200)
-    content: str = Field(min_length=1, max_length=2200)
-    teacher_notes: str = Field(default="", max_length=3000)
-
-
-class DeckPlan(BaseModel):
-    slides: list[SlidePlan] = Field(min_length=3, max_length=45)
 
 
 def read_state(output: Path) -> dict:
@@ -36,19 +23,41 @@ def write_state(output: Path, state: dict):
     temp.replace(path)
 
 
-def layout_brief(layouts: list[dict]) -> list[dict]:
-    def fields(value):
-        result = []
+def presentation_pages(deck: dict) -> list[dict]:
+    """Read actual generated text; never use a second curriculum as its source."""
+    def strings(value, key=""):
+        if key in {"__speaker_note__", "page_number", "slide_number", "section_number", "item_number", "badge_number"} or key.lower().endswith(("_url", "_prompt")):
+            return []
+        if isinstance(value, str):
+            return [value] if value.strip() and key.lower() not in {"image", "icon", "image_query", "icon_query"} and not value.startswith(("/app_data/", "/static/", "<svg")) else []
         if isinstance(value, dict):
-            if value.get("decorative") is False and value.get("name"):
-                result.append({k: value[k] for k in ("name", "max_length", "min_length", "max_items") if k in value})
-            for child in value.values():
-                result.extend(fields(child))
-        elif isinstance(value, list):
-            for child in value:
-                result.extend(fields(child))
-        return result
-    return [{"id": v["id"], "purpose": v.get("description", ""), "fields": fields(v)} for v in layouts]
+            return [text for k, v in value.items() for text in strings(v, k)]
+        if isinstance(value, list):
+            return [text for v in value for text in strings(v, key)]
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return [str(value)]
+        return []
+
+    def title(value):
+        if not isinstance(value, dict):
+            return ""
+        for k, v in value.items():
+            if isinstance(v, str) and any(w in k.lower() for w in ("title", "heading")) and v.strip():
+                return v
+        return next((found for v in value.values() if (found := title(v))), "")
+
+    pages = []
+    for slide in sorted(deck.get("slides", []), key=lambda row: row["index"]):
+        content = slide.get("content", {})
+        text = strings(content)
+        heading = title(content) or (text[0] if text else f"第{slide['index']+1}页")
+        # Remove only the heading occurrence, preserving deliberate repetition.
+        if heading in text:
+            text.remove(heading)
+        pages.append({"title": heading, "content": "\n".join(text),
+            "teacher_notes": slide.get("speaker_note") or content.get("__speaker_note__", ""),
+            "chapter_id": ""})
+    return pages
 
 
 def check_export(path: Path, output: Path, state: dict, expected: int | None = None):
@@ -68,110 +77,77 @@ def check_export(path: Path, output: Path, state: dict, expected: int | None = N
     if bad:
         state["phase"] = "review"
         write_state(output, state)
-        raise ValueError("第 " + "、".join(bad) + " 页文字超出画布，请在课件预览中精简对应页面后重新生成。Word 已保留。")
+        raise ValueError("第 " + "、".join(bad) + " 页文字超出画布，页面数据已保留，可在课件预览中调整后重新生成。")
 
 
-async def compile_slides(task: Any, master: Any, config: Any, output: Path) -> Path:
-    from clawed.llm import LLMClient
-    from clawed.ppt_design import classroom_layouts
+async def generate_presentation(task: Any, brief: dict, config: Any, output: Path) -> Path:
     from clawed.compile_workbench import course_filename
-
+    from clawed.ppt_design import classroom_layouts
     template = task.payload.get("ppt_template") or {}
-    spec = template.get("spec", {})
-    layouts = [v for v in spec.get("layouts", []) if v["id"] in spec.get("selected", [])] if template else classroom_layouts()["layouts"]
-    fingerprint = hashlib.sha256(json.dumps({"master": master.model_dump(), "template": template,
-        "design": layouts, "version": 2, "provider": config.provider.value,
-        "model": getattr(config, config.provider.value + "_model")}, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    fingerprint = hashlib.sha256(json.dumps({"brief": brief, "template": template or {"builtin": classroom_layouts()},
+        "version": "presenton-first-v1", "provider": config.provider.value,
+        "model": getattr(config, config.provider.value + "_model"),
+        "thinking": config.deepseek_thinking, "effort": config.deepseek_reasoning_effort,
+        "endpoint": config.deepseek_base_url}, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     state = read_state(output)
     if state.get("fingerprint") != fingerprint:
-        state = {"fingerprint": fingerprint, "attempt": 0, "template_name": template.get("name", "课堂清晰版"),
-                 "template_version": template.get("version"), "phase": "planning"}
+        state = {"fingerprint": fingerprint, "attempt": 0, "phase": "planning",
+                 "template_name": template.get("name", "课堂清晰版"), "template_version": template.get("version")}
         if task.payload.get("reuse_task_id"):
             previous = read_state(Path(config.output_dir).expanduser().resolve() / task.payload["reuse_task_id"])
-            if previous.get("fingerprint") == fingerprint and previous.get("plan"):
-                state["plan"] = previous["plan"]
-                if previous.get("phase") == "complete":
-                    state["presentation_id"] = previous.get("presentation_id")
-                    state["deck"] = previous.get("deck")
+            if previous.get("fingerprint") == fingerprint and previous.get("phase") == "complete":
+                state.update({key: previous[key] for key in ("presentation_id", "deck", "plan") if key in previous})
+                state["generation_complete"] = True
         write_state(output, state)
-    if not state.get("plan"):
-        event(task.id, "ppt_plan", "正在结合课程内容与课件模板编排每一页")
-        desired = max(8, min(28, round(master.duration_minutes / 2.5)))
-        prompt = (
-            "请将以下教学方案编排为能直接用于课堂投影的中文课件。先理解所选模板提供的页面功能与容量，"
-            "再结合课程资料安排各页；不必逐项照搬教案栏目，也不要逐个文本框机械填充。\n"
-            f"建议约 {desired} 页，可根据实际讲解、例题和活动调整。\n"
-            "每页只处理一个清晰问题。所有学生必须看到的定义、公式、题目条件、活动步骤必须完整出现在页面内容中。"
-            "页数是建议，不是限制；例题题目、例题解析、课堂检测必须分为不同页面。"
-            "例题解析页必须给出完整代入运算与结果，不能只把例题解答放教师备注。"
-            "单页正文建议120–180字、至多4段、至多1块主要公式，超过就拆页；不要用空行堆积高度。"
-            "题目与解析分开展示。教师讲解、提示和参考答案放在 teacher_notes；解析页可展示完整解题过程。"
-            "例题不得只列题名，计算必须给出完整的代入式和正确结果。保持与教学方案的数字、单位、结论一致。"
-            "不能为填满模板编造数据、引文或多余文字。表格超过一页容量时拆分。"
-            "复杂公式独立成块，避免与长段落混排；简单公式可用 Unicode 数学符号。"
-            "content 用普通 Markdown 编排学生可见内容，teacher_notes 单独填写。中文默认简体，专业符号、单位和必要代码保留。\n"
-            "不要出现 I Do、We Do、You Do、REMEMBER 等英文教学指令。不要引用不存在的‘下方公式’、教材题号或任务卡。\n"
-            f"用户教学要求：{task.payload.get('requirements', '')}\n"
-            f"课后作业：{'按教学方案安排' if task.payload.get('include_homework') else '不安排，不生成作业页或作业要求'}。\n"
-            f"模板组织要求：{spec.get('instruction', '')}\n"
-            f"模板实际页面及容量：{json.dumps(layout_brief(layouts), ensure_ascii=False)}\n"
-            f"课程教学方案：{master.model_dump_json()}\n"
-            "严格返回符合下列 JSON Schema 的对象，根字段必须为 slides，不返回完成说明或摘要。\n"
-            f"{json.dumps(DeckPlan.model_json_schema(), ensure_ascii=False)}"
-        )
-        plan = await LLMClient(config).safe_generate_json(prompt, DeckPlan, max_retries=1, max_tokens=22000,
-            system="你是严谨的中文课程设计教师。输出符合给定结构的课件计划，保持课程事实与题目条件，按实际模板组织内容。")
-        state["plan"] = plan.model_dump()
-        state["phase"] = "generating"
-        write_state(output, state)
-    plan = DeckPlan.model_validate(state["plan"])
     async with engine_lock, Engine() as engine:
         await engine.configure(config)
-        template_id = spec.get("engine_id") if template else await engine.default_template()
-        # An interrupted export can be retried without another model call.
-        pid = state.get("presentation_id")
-        deck = None
-        if pid:
-            try:
-                deck = await engine.json("GET", "/api/v1/ppt/presentation/" + pid)
-            except ValueError:
-                deck = None
-        if deck and len(deck.get("slides", [])) == len(plan.slides):
-            state["deck"] = deck
-        else:
+        template_id = template.get("spec", {}).get("engine_id") if template else await engine.default_template()
+        if not state.get("generation_complete"):
             if state.pop("failed", False) or state.pop("cancelled", False):
-                state.pop("engine_task_id", None)
-                state["attempt"] += 1
-            if not state.get("engine_task_id"):
-                operation = "clawed-" + hashlib.sha256(f"{task.id}:{fingerprint}:{state['attempt']}".encode()).hexdigest()
-                state["engine_task_id"] = operation
-                state["phase"] = "submitting"
-                write_state(output, state)
-            operation = state["engine_task_id"]
-            markdown = [f"# {s.title}\n\n{s.content}\n\n【仅教师备注，不显示在学生页面】\n{s.teacher_notes}" for s in plan.slides]
+                # First inspect an existing request: a lost response may have
+                # occurred after the engine completed it successfully.
+                remote = await engine.json("GET", "/api/v1/async-tasks/status/" + state["engine_task_id"]) if state.get("engine_task_id") else {}
+                if remote.get("status") == "error":
+                    state.pop("engine_task_id", None)
+                    state["attempt"] += 1
+            operation = state.get("engine_task_id") or "clawed-" + hashlib.sha256(f"{task.id}:{fingerprint}:{state['attempt']}".encode()).hexdigest()
+            state.update(engine_task_id=operation, phase="submitting")
+            write_state(output, state)
+            event(task.id, "ppt_plan", "Presenton 正在根据任务规划课件大纲、页面与版式")
             try:
                 submitted = await engine.json("POST", "/api/v1/clawed/generate/" + operation, json={
-                    "content": task.payload["topic"], "slides_markdown": markdown, "template": template_id,
-                    "language": "简体中文", "tone": "educational", "include_title_slide": False,
-                    "include_table_of_contents": False, "web_search": False, "export_as": "pptx",
-                    "instructions": "面向课堂投影，中文大字号。完整保留数字、单位、公式和题目条件；禁止目录、虚构页码、虚构图表和省略号截断。"
-                    "仅教师备注放入 __speaker_note__，不得出现在学生页面。复杂公式独立占区，正文不混排多个数学表达式。"
-                    "不要增加计划之外的题目、作业或结论，不引用本页没有的公式或图。用中文替换英文教学指令。"
-                    + ("允许按计划安排课后作业。" if task.payload.get("include_homework") else "不安排课后作业，不生成作业栏目或作业要求。")
-                    + "用户要求：" + task.payload.get("requirements", "") + "模板要求：" + spec.get("instruction", "")})
+                    "content": json.dumps(brief, ensure_ascii=False), "template": template_id,
+                    "language": "简体中文", "tone": "educational", "verbosity": "standard",
+                    "include_title_slide": True, "include_table_of_contents": False,
+                    "web_search": False, "export_as": "pptx",
+                    "instructions": (
+                        "以学生或听众实际观看的PPT为主要产物。根据任务目的、受众、资料、时长和要求，自主编排大纲、页数与讲解节奏。"
+                        "不套用统一的教案栏目，不强制加入互动、检测、情景任务或作业；用户明确禁止的环节在正文和备注中都不能出现。"
+                        "homework_allowed=false时不安排任何课后任务；true只是许可，仍服从用户文字要求。"
+                        "充分使用所选模板的标题、正文、多栏、图文、表格、流程和重复组件，让版式服务内容；不必逐页套用模板，不为填框编造内容。"
+                        "保持适当信息密度，既不一段一句拆成大量空白页，也不堆满小字。完整呈现必要知识、题目条件与关键步骤，不用省略号截断内容。"
+                        "章节和页数根据实际内容决定，不要求每章或每个要点恰好一页。"
+                        "课程资料为事实依据，保留关键名称、数字、定义和计算结果。未知的时效性数据不编造，说明以正式资料为准。"
+                        "教师讲解提示和学生练习参考答案写入__speaker_note__，练习题目页不提前公布答案。讲解例题的解答可正常展示。"
+                        "使用简体中文教学指令；公式、单位、代码和外语教学所需文字保留。模板要求只约束视觉与组织建议，用户任务要求优先。"
+                        "图表仅用于资料已有的数据；不能虚构统计数字来装饰页面。"
+                        f"本次约{brief['duration_minutes']}分钟，请按可实际讲解的内容量安排页面，不把建议时长理解成固定页数。"
+                    )})
                 state["presentation_id"] = submitted["data"]["presentation_id"]
                 write_state(output, state)
                 def progress(status):
                     data = status.get("data") or {}
                     count = data.get("created_slides", 0)
-                    state.update(phase="generating", completed=count, total=len(plan.slides))
+                    total = count + data.get("remaining_slides", 0)
+                    state.update(phase="generating", completed=count, total=total)
                     write_state(output, state)
                     if count != progress.last:
-                        event(task.id, "ppt_generate", f"课件页面已生成 {count}/{len(plan.slides)} 页")
+                        event(task.id, "ppt_generate", f"Presenton 已生成 {count}/{total} 页" if total else "Presenton 正在编排内容与选择版式")
                         progress.last = count
                 progress.last = None
                 await engine.wait(operation, progress)
-                state["deck"] = await engine.json("GET", "/api/v1/ppt/presentation/" + state["presentation_id"])
+                state["generation_complete"] = True
+                write_state(output, state)
             except asyncio.CancelledError:
                 state["cancelled"] = True
                 write_state(output, state)
@@ -186,16 +162,19 @@ async def compile_slides(task: Any, master: Any, config: Any, output: Path) -> P
                 raise
         state["phase"] = "exporting"
         write_state(output, state)
-        event(task.id, "ppt_export", "正在导出并检查完整课件")
+        event(task.id, "ppt_export", "正在导出 Presenton 课件，保留完整多区域版式")
         await engine.json("POST", "/api/v1/clawed/presentations/" + state["presentation_id"] + "/prepare-export")
         state["deck"] = await engine.json("GET", "/api/v1/ppt/presentation/" + state["presentation_id"])
+        state["plan"] = {"slides": presentation_pages(state["deck"])}
+        if state["plan"]["slides"]:
+            state["deck"]["title"] = state["plan"]["slides"][0]["title"]
         write_state(output, state)
         exported = await engine.json("POST", "/api/v1/ppt/presentation/" + state["presentation_id"] + "/export", json={"export_as": "pptx"})
-        data = (await engine.request("GET", exported["path"])).content
         path = output / course_filename(task.payload["topic"], "教学课件.pptx")
-        path.write_bytes(data)
-        check_export(path, output, state, len(plan.slides))
-        state.update(phase="complete", file=str(path), completed=len(plan.slides), total=len(plan.slides))
+        path.write_bytes((await engine.request("GET", exported["path"])).content)
+        check_export(path, output, state)
+        count = len(state["deck"]["slides"])
+        state.update(phase="complete", file=str(path), completed=count, total=count)
         write_state(output, state)
         return path
 
@@ -237,9 +216,16 @@ async def edit_deck(task: Any, config: Any) -> dict:
         exported = await engine.json("POST", "/api/v1/ppt/presentation/" + state["presentation_id"] + "/export", json={"export_as": "pptx"})
         path = output / course_filename(task.payload["topic"], "教学课件.pptx")
         path.write_bytes((await engine.request("GET", exported["path"])).content)
-        for name in ("master.json", "资料来源.json"):
+        for name in ("master.json", "plan.json", "content_state.json", "资料来源.json"):
             if (source / name).is_file():
                 shutil.copy2(source / name, output / name)
+        state["plan"] = {"slides": presentation_pages(state["deck"])}
+        master_path = output / "master.json"
+        if master_path.is_file():
+            material = json.loads(master_path.read_text(encoding="utf-8"))
+            if material.get("schema_version") == "ppt-first-v1":
+                material["slides"] = state["plan"]["slides"]
+                master_path.write_text(json.dumps(material, ensure_ascii=False, indent=2), encoding="utf-8")
         check_export(path, output, state)
         state.update(phase="complete", file=str(path))
         write_state(output, state)

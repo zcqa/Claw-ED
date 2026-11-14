@@ -153,9 +153,14 @@ async def deck(task_id: str):
         return {"available": False, "legacy": True, "message": "此任务使用旧版课件导出，可重新导出以使用新版预览和编辑。"}
     slides = sorted(state.get("deck", {}).get("slides", []), key=lambda s: s["index"])
     plans = state.get("plan", {}).get("slides", [])
+    chapter_titles = {}
+    if (output / "plan.json").is_file():
+        chapter_titles = {c["id"]: c["title"] for c in json.loads((output / "plan.json").read_text(encoding="utf-8")).get("chapters", [])}
     return {"available": bool(slides) and state.get("phase") in {"complete", "review"}, "phase": state.get("phase"), "total": state.get("total", len(plans)),
             "completed": state.get("completed", 0), "template_name": state.get("template_name", "课堂清晰版"),
-            "slides": [{"index": s["index"], "title": ((s.get("content", {}).get("page") or {}).get("title")
+            "slides": [{"index": s["index"], "chapter_id": plans[i].get("chapter_id", "") if i < len(plans) else "",
+                        "chapter_title": chapter_titles.get(plans[i].get("chapter_id", ""), "") if i < len(plans) else "",
+                        "title": ((s.get("content", {}).get("page") or {}).get("title")
                         or (plans[i].get("title") if i < len(plans) else f"第 {i+1} 页")),
                         "notes": s.get("speaker_note", ""), "content": s.get("content", {})} for i, s in enumerate(slides)]}
 

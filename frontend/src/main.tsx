@@ -1260,7 +1260,7 @@ function CreatePage() {
                       update("include_homework", e.target.checked)
                     }
                   />
-                  包含课后作业
+                  允许安排课后作业（仍以教学要求为准）
                 </label>
                 <label className="check-row">
                   <input
@@ -2207,7 +2207,7 @@ function JobDetail() {
       </div>
       {item.payload.reuse_task_id && (
         <p className="field-hint">
-          本次以已有教学方案为基础重新导出。
+          本次以原任务的要求和已有内容为基础生成新版本。
           <Link to={"/app/jobs/" + item.payload.reuse_task_id}>查看原任务</Link>
         </p>
       )}
@@ -2230,18 +2230,18 @@ function JobDetail() {
           </span>
         </div>
       )}
-      <div className="detail-grid">
+      <div className={`detail-grid${tab === "ppt" && !active ? " ppt-focused" : ""}`}>
         <div>
           <section className="panel">
             <div className="tabs content-tabs">
               {[
                 ["overview", "任务概览"],
-                ["content", "教学内容"],
                 ...((
                   item.payload.outputs || ["teacher", "student", "slides"]
                 ).includes("slides")
                   ? [["ppt", "课件预览"]]
                   : []),
+                ["content", "教学内容"],
                 [
                   "files",
                   `生成文件${files.length ? ` · ${files.length}` : ""}`,
@@ -2290,7 +2290,7 @@ function JobDetail() {
                     <dt>教学要求</dt>
                     <dd className="pre-wrap">
                       {item.payload.requirements ||
-                        "根据课程主题合理设计教学目标与活动。"}
+                        "根据本次任务和资料规划内容章节。"}
                     </dd>
                     <dt>参考资料</dt>
                     <dd>
@@ -2311,7 +2311,7 @@ function JobDetail() {
                     <div className="objective-box">
                       <span>
                         <Sparkles size={17} />
-                        生成的教学目标
+                        本次内容目标
                       </span>
                       <p>{item.result.objective}</p>
                     </div>
@@ -2344,6 +2344,12 @@ function JobDetail() {
                       <span>以下为本次生成的教学草稿，请核对后使用。</span>
                     </div>
                     {[
+                      "任务说明",
+                      "课件内容",
+                      "任务理解",
+                      "章节规划",
+                      "章节内容",
+                      "模板文档内容",
                       "模板教学方案",
                       "默认产物教学方案",
                       "objective",
@@ -2486,7 +2492,7 @@ function JobDetail() {
         <Modal title="重新导出与更换模板" close={closeReexport}>
           <div className="manage-content">
             <p>
-              沿用同一模板规则时可复用内容；更换栏目结构或填写要求时，模型会重新组织对应内容。
+              课件优先由 Presenton 编排，教案与讲义依据实际课件整理。匹配的新版本课件可复用，原文件保留。
             </p>
             {templates.error && (
               <ErrorBox text={templates.error} retry={templates.reload} />
